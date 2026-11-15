@@ -39,6 +39,7 @@ KINDS = {
     "mapping": "application/octet-stream",
     "report_json": "application/json",
     "report_html": "text/html; charset=utf-8",
+    "restored": None,
 }
 
 

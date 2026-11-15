@@ -1,4 +1,6 @@
-"""CLI на том же ядре: datamask mask input.xlsx --config cfg.json --out out.xlsx --mapping out.dmmap
+"""CLI на том же ядре:
+datamask mask input.xlsx --config cfg.json --out out.xlsx --mapping out.dmmap
+datamask unmask dashboard.html --mapping out.dmmap --out dashboard_real.html
 
 Пароль — из DATAMASK_PASSWORD или интерактивно, никогда не аргументом командной строки
 (аргументы видны в списке процессов и в истории оболочки)."""
@@ -23,13 +25,16 @@ from datamask.formats.base import OpenOptions
 from datamask.mapping.crypto import MIN_PASSWORD, write_atomic
 from datamask.mapping.store import MappingStore
 from datamask.report import build_report
+from datamask.unmasking import unmask_file
 
 
-def _password() -> str:
+def _password(confirm: bool = True) -> str:
     env = os.environ.get("DATAMASK_PASSWORD")
     if env is not None:
         return env
     first = getpass.getpass("Пароль таблицы соответствий: ")
+    if not confirm:
+        return first
     if getpass.getpass("Повторите пароль: ") != first:
         raise UserError("Пароли не совпадают")
     return first
@@ -78,6 +83,37 @@ def mask_main(argv: list[str]) -> int:
             print(f"! {w}", file=sys.stderr)
         replaced = sum(c.replaced for c in result.columns)
         print(f"Готово: заменено значений {replaced}, файл {args.out.name}", file=sys.stderr)
+        return 0
+    except UserError as e:
+        print(f"Ошибка: {e}", file=sys.stderr)
+        return 2
+
+
+def unmask_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(
+        prog="datamask unmask",
+        description="Вернуть настоящие значения: XLSX, CSV, TXT, MD, HTML, JSON",
+    )
+    p.add_argument("input", type=Path)
+    p.add_argument("--mapping", type=Path, required=True, help="таблица соответствий (.dmmap)")
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--report", type=Path, help="куда сохранить отчёт (.json)")
+    args = p.parse_args(argv)
+    try:
+        if args.out.resolve() == args.input.resolve():
+            raise UserError("Исходный файл не изменяется: укажите другой --out")
+        store = MappingStore.decrypt(args.mapping.read_bytes(), _password(confirm=False))
+        report = unmask_file(args.input, args.out, store)
+        if args.report:
+            args.report.write_text(json.dumps(report, ensure_ascii=False, indent=1), "utf-8")
+        for note in report["notes"]:
+            print(f"! {note}", file=sys.stderr)
+        print(
+            f"Готово: заменено токенов {report['tokens_replaced']}, "
+            f"фейков {report['fakes_replaced']}, неизвестных токенов {report['unknown_tokens']}, "
+            f"файл {args.out.name}",
+            file=sys.stderr,
+        )
         return 0
     except UserError as e:
         print(f"Ошибка: {e}", file=sys.stderr)

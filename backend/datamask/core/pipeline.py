@@ -7,6 +7,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Literal
 
 from datamask.core.models import (
     ENTITY_CATEGORY,
@@ -26,6 +27,7 @@ from datamask.detectors.regex_ru import DETECTORS, CustomTermsDetector
 from datamask.detectors.suggest import Suggestion, suggest_column
 from datamask.formats.base import Document, FormatAdapter
 from datamask.mapping.store import MappingStore
+from datamask.mapping.unmask import Unmasker, UnmaskStats, restore_date, restore_number
 from datamask.maskers import MASKERS, METHOD_LABELS, reversible, supported
 from datamask.maskers.base import MaskContext, MaskSkip
 
@@ -406,7 +408,12 @@ def run_mask(
             if cell.kind in ("error", "bool"):
                 st.skipped_other += 1
                 continue
-            col_info = {"sheet": info.name, "column": st.key, "header": st.header}
+            col_info = {
+                "sheet": info.name,
+                "column": st.key,
+                "header": st.header,
+                "header_row": str(sc.header_row),
+            }
             try:
                 new = engine.mask_value(cc, cell.value, f"{info.name}!{st.key}", col_info)
             except MaskSkip:
@@ -550,3 +557,81 @@ def dry_run(
     warnings = [FREE_TEXT_WARNING] + [r.message for r in doc.risks]
     return DryRun(sheets, summary, warnings)
 
+
+# ======================= размаскировка таблиц (M6) =======================
+
+
+@dataclass(frozen=True)
+class _Restore:
+    kind: Literal["date", "number"]
+    param: float
+    header_row: int
+
+
+def _restore_targets(
+    adapter: FormatAdapter, doc: Document, sheet: str, store: MappingStore, stats: UnmaskStats
+) -> dict[int, _Restore]:
+    """Колонки листа, где были сдвиг дат или масштаб: по листу и заголовку (колонку могли
+    переставить). Лист одного листового файла (CSV) подходит под любой исходный лист."""
+    single = len(doc.sheets) == 1
+    wanted: list[tuple[dict[str, str], _Restore]] = []
+    for kind, table, name in (
+        ("date", store.date_shifts, "days"),
+        ("number", store.scale_factors, "factor"),
+    ):
+        for item in table.values():
+            for info in item.get("columns", []):
+                if info.get("sheet") == sheet or single:
+                    hr = int(info.get("header_row") or 1)
+                    wanted.append((info, _Restore(kind, float(item[name]), hr)))  # type: ignore[arg-type]
+    if not wanted:
+        return {}
+    rows_needed = {r.header_row for _, r in wanted}
+    headers: dict[int, dict[int, str]] = defaultdict(dict)  # строка → колонка → заголовок
+    for cell in adapter.iter_cells(doc, sheet):
+        if cell.row > max(rows_needed):
+            break
+        if cell.row in rows_needed:
+            headers[cell.row][cell.col] = to_text(cell.value)
+    out: dict[int, _Restore] = {}
+    for info, r in wanted:
+        row = headers.get(r.header_row, {})
+        header = info.get("header", "").strip()
+        try:
+            col: int | None = adapter.column_index(info.get("column", ""))
+        except ValueError:
+            col = None
+        if col is None or row.get(col, "") != header:
+            col = next((c for c, h in sorted(row.items()) if h == header and header), None)
+        if col is None:
+            stats.missing_columns.append(
+                f"{info.get('sheet', '')} / {header or info.get('column')}"
+            )
+        else:
+            out[col] = r
+    return out
+
+
+def run_unmask_table(adapter: FormatAdapter, doc: Document, unmasker: Unmasker) -> UnmaskStats:
+    """doc открыт с OpenOptions(writable=True). Сохранение — adapter.save() после вызова."""
+    stats = unmasker.stats
+    for info in doc.sheets:
+        targets = _restore_targets(adapter, doc, info.name, unmasker.store, stats)
+        for cell in adapter.iter_cells(doc, info.name):
+            t = targets.get(cell.col)
+            new: CellValue = cell.value
+            if t and cell.row > t.header_row and cell.kind in ("date", "number", "string"):
+                try:
+                    if t.kind == "date":
+                        new = restore_date(cell.value, int(t.param))
+                        stats.dates_restored += 1
+                    else:
+                        new = restore_number(cell.value, t.param)
+                        stats.numbers_restored += 1
+                except MaskSkip:
+                    pass
+            elif cell.kind == "string" and isinstance(cell.value, str):
+                new = unmasker.text(cell.value)
+            if new != cell.value:
+                adapter.set_value(doc, cell, new)
+    return stats

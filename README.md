@@ -25,6 +25,21 @@ uv run datamask mask clients.xlsx --config cfg.json --out clients_masked.xlsx \
 `cfg.json` — настройки в формате `MaskConfig` (пример — в `SPEC.md`, раздел 10). Пароль
 никогда не передаётся аргументом: аргументы видны в списке процессов и истории оболочки.
 
+Вернуть настоящие значения в файл, сделанный по замаскированным данным (XLSX, CSV, TXT, MD,
+HTML, JSON):
+
+```bash
+uv run datamask unmask dashboard.html --mapping clients.dmmap --out dashboard_real.html
+```
+
+## Где хранятся данные
+
+- Временные файлы сессии — во временной папке с правами `0700`, удаляются при выходе.
+- Проекты и шаблоны — в папке данных приложения: `~/Library/Application Support/datamask`
+  (macOS), `%APPDATA%\datamask` (Windows), `~/.local/share/datamask` (Linux). Таблицы
+  соответствий проектов зашифрованы паролем проекта; открыто лежат только названия проектов,
+  даты и число записей.
+
 ## Разработка
 
 ```bash

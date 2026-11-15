@@ -1,4 +1,4 @@
-"""Проекты и шаблоны через API (M6). A16: в папке данных нет открытых значений."""
+"""Проекты, шаблоны и размаскировка через API (M6). A16: в папке данных нет открытых значений."""
 
 import time
 
@@ -96,6 +96,44 @@ def test_a16_data_dir_has_no_plaintext(make_client, fixtures, tmp_path) -> None:
     data = b"".join(f.read_bytes() for f in (tmp_path / "data").rglob("*") if f.is_file())
     assert data
     assert [v for v in originals if v.encode() in data] == []
+
+
+def test_unmask_api_with_mapping_and_project(make_client, fixtures, tmp_path) -> None:
+    client = make_client()
+    pid = client.post("/api/projects", json={"name": "Клиент", "password": PASSWORD}).json()["id"]
+    job = wait(client, mask(client, fixtures, project_config(pid)).json()["job_id"])
+    masked = client.get(f"/api/jobs/{job['job_id']}/download/masked").content
+    mapping = client.get(f"/api/jobs/{job['job_id']}/download/mapping").content
+    original = load_workbook(fixtures / "clients.xlsx")["Клиенты"]["B4"].value
+
+    for extra, files in (
+        ({"project_id": pid}, {}),
+        ({}, {"mapping": ("m.dmmap", mapping)}),
+    ):
+        r = client.post(
+            "/api/unmask",
+            data={"password": PASSWORD, **extra},
+            files={"file": ("Выгрузка_Иванов.xlsx", masked), **files},
+        )
+        assert r.status_code == 200, r.text
+        job = wait(client, r.json()["job_id"])
+        assert job["status"] == "done", job["error"]
+        assert job["summary"]["tokens_replaced"] > 0 and job["summary"]["dates_restored"] > 0
+        r = client.get(f"/api/jobs/{job['job_id']}/download/restored")
+        assert "_unmasked.xlsx" in r.headers["content-disposition"]
+        out = tmp_path / "r.xlsx"
+        out.write_bytes(r.content)
+        assert load_workbook(out)["Клиенты"]["B4"].value == original
+
+    r = client.post("/api/unmask", data={"password": "неверный-пароль", "project_id": pid},
+                    files={"file": ("a.html", b"x")})  # fmt: skip
+    job = wait(client, r.json()["job_id"])
+    assert job["status"] == "error" and "Неверный пароль" in job["error"]
+    r = client.post("/api/unmask", data={"password": PASSWORD}, files={"file": ("a.html", b"x")})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "no_mapping"
+    r = client.post("/api/unmask", data={"password": PASSWORD, "project_id": pid},
+                    files={"file": ("a.docx", b"x")})  # fmt: skip
+    assert r.status_code == 415
 
 
 def test_templates(make_client) -> None:
