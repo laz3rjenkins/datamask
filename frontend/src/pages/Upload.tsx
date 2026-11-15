@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, errorText } from '../api/client'
-import type { FileInfo, Meta } from '../api/types'
-import { Alert, Button, Spinner } from '../components/ui'
+import type { FileInfo, Meta, Project } from '../api/types'
+import { Alert, Button, Spinner, selectCls } from '../components/ui'
 
 const REJECT: Record<string, string> = {
   xls: 'Старый формат .xls не поддерживается. Пересохраните файл в Excel как .xlsx',
@@ -11,11 +11,19 @@ const REJECT: Record<string, string> = {
 export default function Upload({
   meta,
   onUploaded,
+  onOpenProjects,
 }: {
   meta: Meta
-  onUploaded: (info: FileInfo, name: string) => void
+  onUploaded: (info: FileInfo, name: string, project: Project | null) => void
+  onOpenProjects: () => void
 }) {
   const input = useRef<HTMLInputElement>(null)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [projectId, setProjectId] = useState('')
+
+  useEffect(() => {
+    api.projects().then(setProjects, () => setProjects([]))
+  }, [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [over, setOver] = useState(false)
@@ -34,7 +42,7 @@ export default function Upload({
     setBusy(true)
     setError(null)
     try {
-      onUploaded(await api.upload(file), file.name)
+      onUploaded(await api.upload(file), file.name, projects.find((p) => p.id === projectId) ?? null)
     } catch (e) {
       setError(errorText(e))
       setBusy(false)
@@ -48,6 +56,33 @@ export default function Upload({
         <p className="mt-2 text-neutral-600 dark:text-neutral-400">
           Загрузите выгрузку — datamask найдёт колонки с персональными данными и заменит их
           псевдонимами. Файл не покидает этот компьютер.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <label htmlFor="project" className="block text-sm font-medium">
+          Проект
+        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            id="project"
+            className={`${selectCls} py-2`}
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+          >
+            <option value="">Без проекта (только этот файл)</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="text-sm underline" onClick={onOpenProjects}>
+            {projects.length ? 'Управление проектами' : 'Создать проект'}
+          </button>
+        </div>
+        <p className="text-xs text-neutral-500">
+          Проект нужен, чтобы псевдонимы совпадали в разных файлах одного клиента.
         </p>
       </div>
 

@@ -6,10 +6,13 @@ import type {
   Meta,
   Sanitize,
   SuggestResult,
+  Template,
+  TemplateRule,
 } from '../api/types'
 
 /** Настройки экрана 2. Живут в App, чтобы пережить переход «Назад» с экрана проверки. */
 export interface Settings {
+  projectId: string | null // null — согласованность в пределах файла
   categories: Categories
   customTerms: string // по слову или фразе на строку
   sanitize: Sanitize
@@ -19,6 +22,7 @@ export interface Settings {
 }
 
 export const initialSettings = (): Settings => ({
+  projectId: null,
   categories: { personal: true, financial: true, commercial: false },
   customTerms: '',
   sanitize: { comments: 'remove', hidden_sheets: 'keep', images: 'keep' },
@@ -73,6 +77,8 @@ export function buildConfig(settings: Settings, suggestions: SuggestResult): Mas
   }
   return {
     categories: settings.categories,
+    consistency_scope: settings.projectId ? 'project' : 'file',
+    project_id: settings.projectId,
     sheets,
     custom_terms: parseTerms(settings.customTerms),
     sanitize: settings.sanitize,
@@ -92,4 +98,47 @@ export function changesType(kinds: CellKind[], method: string): boolean {
   const filled = kinds.filter((k) => k !== 'empty' && k !== 'formula' && k !== 'error')
   const typed = filled.filter((k) => k === 'number' || k === 'date').length
   return typed > 0 && typed * 2 >= filled.length
+}
+
+// Заголовки сравниваются без регистра, лишних пробелов и с ё = е: «Тел. » и «тел.» — одно.
+const headerKey = (h: string) => h.trim().replace(/\s+/g, ' ').toLowerCase().replaceAll('ё', 'е')
+
+/** Правила шаблона из текущих настроек: «заголовок → тип + способ». Колонки без заголовка
+ *  пропускаются; при повторе заголовка побеждает первая колонка. */
+export function templateRules(
+  columns: Settings['columns'],
+  suggestions: SuggestResult,
+): TemplateRule[] {
+  const out = new Map<string, TemplateRule>()
+  for (const sheet of suggestions.sheets) {
+    for (const c of sheet.columns) {
+      const cfg = columns[sheet.sheet]?.[c.key]
+      const key = headerKey(c.header)
+      if (cfg && key && !out.has(key)) out.set(key, { header: c.header.trim(), ...cfg })
+    }
+  }
+  return [...out.values()]
+}
+
+/** Применяет шаблон: колонки с совпавшим заголовком получают его тип и способ. */
+export function applyTemplate(
+  columns: Settings['columns'],
+  template: Template,
+  suggestions: SuggestResult,
+): { columns: Settings['columns']; matched: number } {
+  const rules = new Map(template.rules.map((r) => [headerKey(r.header), r]))
+  const out = { ...columns }
+  let matched = 0
+  for (const sheet of suggestions.sheets) {
+    const cols = { ...out[sheet.sheet] }
+    for (const c of sheet.columns) {
+      const rule = rules.get(headerKey(c.header))
+      if (!rule) continue
+      const { entity, method, params } = rule
+      cols[c.key] = params && Object.keys(params).length ? { entity, method, params } : { entity, method }
+      matched++
+    }
+    out[sheet.sheet] = cols
+  }
+  return { columns: out, matched }
 }

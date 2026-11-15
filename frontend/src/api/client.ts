@@ -8,7 +8,10 @@ import type {
   MaskConfig,
   Meta,
   Preview,
+  Project,
   SuggestResult,
+  Template,
+  TemplateRule,
 } from './types'
 
 export class ApiError extends Error {
@@ -93,11 +96,28 @@ export const api = {
     body: { config: MaskConfig; password: string | null; output_name: string },
   ) => post<{ job_id: string }>(`/api/files/${fileId}/mask`, body),
 
-  job: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
+  job: <S>(jobId: string) => request<Job<S>>(`/api/jobs/${jobId}`),
 
   downloadUrl: (jobId: string, kind: string) => `/api/jobs/${jobId}/download/${kind}`,
 
   clearSession: () => request<{ status: string }>('/api/session', { method: 'DELETE' }),
+
+  projects: () => request<Project[]>('/api/projects'),
+  createProject: (name: string, password: string) => post<Project>('/api/projects', { name, password }),
+  deleteProject: (id: string) => request<{ status: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
+
+  templates: () => request<Template[]>('/api/templates'),
+  createTemplate: (name: string, rules: TemplateRule[]) => post<Template>('/api/templates', { name, rules }),
+  deleteTemplate: (id: string) => request<{ status: string }>(`/api/templates/${id}`, { method: 'DELETE' }),
+
+  unmask(file: File, source: { mapping: File } | { projectId: string }, password: string) {
+    const body = new FormData()
+    body.append('file', file)
+    if ('mapping' in source) body.append('mapping', source.mapping)
+    else body.append('project_id', source.projectId)
+    body.append('password', password)
+    return request<{ job_id: string }>('/api/unmask', { method: 'POST', body })
+  },
 }
 
 export function errorText(e: unknown): string {

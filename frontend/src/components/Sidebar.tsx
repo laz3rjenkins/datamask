@@ -73,6 +73,11 @@ export default function Sidebar({
           onChange={(e) => setTerms(e.target.value)}
           onBlur={() => terms !== settings.customTerms && onChange({ customTerms: terms })}
         />
+        {settings.projectId && (
+          <p className="mt-1 text-xs text-neutral-500">
+            Словарь проекта применяется автоматически, новые слова добавятся в проект.
+          </p>
+        )}
       </section>
 
       <section className="space-y-3">

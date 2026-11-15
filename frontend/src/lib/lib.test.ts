@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { Meta, SuggestResult } from '../api/types'
+import type { Meta, SuggestResult, Template } from '../api/types'
 import { formatCell, splitBySpans } from './format'
 import {
   applySuggestions,
+  applyTemplate,
+  templateRules,
   buildConfig,
   changeEntity,
   changesType,
@@ -56,6 +58,29 @@ describe('settings', () => {
     expect(cfg.custom_terms).toEqual(['Ромашка', 'Проект Альфа'])
     expect(buildConfig({ ...s, headerRows: { Клиенты: 1 } }, suggestions).sheets['Клиенты'].header_row).toBe(1)
     expect(parseTerms('')).toEqual([])
+  })
+
+  it('проект включает согласованность по проекту', () => {
+    const cfg = buildConfig({ ...initialSettings(), projectId: 'abc' }, suggestions)
+    expect([cfg.consistency_scope, cfg.project_id]).toEqual(['project', 'abc'])
+    expect(buildConfig(initialSettings(), suggestions).consistency_scope).toBe('file')
+  })
+
+  it('сохраняет и применяет шаблон по заголовкам', () => {
+    const cols = { Клиенты: { B: { entity: 'PHONE', method: 'partial', params: { keep_last: 2 } } } }
+    const rules = templateRules(cols, suggestions)
+    expect(rules).toEqual([{ header: 'Тел.', entity: 'PHONE', method: 'partial', params: { keep_last: 2 } }])
+
+    // другой файл: колонку переставили, заголовок записан иначе
+    const other: SuggestResult = {
+      text_findings: [],
+      sheets: [{ ...suggestions.sheets[0], columns: [{ ...suggestions.sheets[0].columns[0], key: 'F', header: ' тел. ' }] }],
+    }
+    const t: Template = { id: '1', name: 'CRM', created_at: '', rules }
+    expect(applyTemplate({}, t, other)).toEqual({
+      columns: { Клиенты: { F: { entity: 'PHONE', method: 'partial', params: { keep_last: 2 } } } },
+      matched: 1,
+    })
   })
 
   it('предупреждает о смене типа только для числовых и датовых колонок', () => {

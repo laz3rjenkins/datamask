@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import { api, errorText } from '../api/client'
-import type { DryRun, FileInfo, Job, MaskConfig, Meta } from '../api/types'
+import type { DryRun, FileInfo, Job, JobSummary, MaskConfig, Meta } from '../api/types'
 import { Alert, Button, Irreversible, Spinner, Tabs, inputCls } from '../components/ui'
 import { formatCell } from '../lib/format'
+import { useJob } from '../lib/useJob'
 
 export default function Review({
   meta,
   file,
   fileName,
   config,
+  projectName,
   onBack,
   onDone,
 }: {
@@ -16,6 +18,7 @@ export default function Review({
   file: FileInfo
   fileName: string
   config: MaskConfig
+  projectName: string | null
   onBack: () => void
   onDone: (job: Job, outputName: string) => void
 }) {
@@ -29,8 +32,10 @@ export default function Review({
   const [password, setPassword] = useState('')
   const [repeat, setRepeat] = useState('')
   const [noMapping, setNoMapping] = useState(false)
-  const [job, setJob] = useState<Job | null>(null)
+  const [jobId, setJobId] = useState<string | null>(null)
   const [maskError, setMaskError] = useState<string | null>(null)
+  const { job, error: jobError } = useJob<JobSummary>(jobId)
+  const project = config.project_id !== null
 
   useEffect(() => {
     api
@@ -42,28 +47,19 @@ export default function Review({
       .catch((e) => setError(errorText(e)))
   }, [file.file_id, config])
 
-  // Опрос фоновой задачи до завершения.
-  const jobId = job?.job_id
-  const running = job && (job.status === 'queued' || job.status === 'running')
   useEffect(() => {
-    if (!jobId || !running) return
-    const t = setInterval(async () => {
-      try {
-        const j = await api.job(jobId)
-        setJob(j)
-        if (j.status === 'done') onDone(j, outName)
-        if (j.status === 'error') setMaskError(j.error)
-      } catch (e) {
-        setMaskError(errorText(e))
-        setJob(null)
-      }
-    }, 400)
-    return () => clearInterval(t)
-  }, [jobId, running, onDone, outName])
+    if (job?.status === 'done') onDone(job, outName)
+  }, [job, onDone, outName])
+  const running = !!jobId && !jobError && job?.status !== 'done'
+  const shownError = maskError ?? jobError
 
   const label = (e: string) => meta.entities.find((x) => x.value === e)?.label ?? e
   const method = (m: string) => meta.methods.find((x) => x.value === m)
-  const passwordProblem = noMapping
+  const passwordProblem = project
+    ? password
+      ? null
+      : 'Введите пароль проекта'
+    : noMapping
     ? null
     : password.length < meta.min_password
       ? `Не короче ${meta.min_password} символов`
@@ -74,13 +70,14 @@ export default function Review({
 
   async function start() {
     setMaskError(null)
+    setJobId(null)
     try {
       const { job_id } = await api.mask(file.file_id, {
-        config: { ...config, save_mapping: !noMapping },
-        password: noMapping ? null : password,
+        config: { ...config, save_mapping: project || !noMapping },
+        password: !project && noMapping ? null : password,
         output_name: outName,
       })
-      setJob({ job_id, status: 'queued', progress: 0, artifacts: [], error: null, summary: null })
+      setJobId(job_id)
     } catch (e) {
       setMaskError(errorText(e))
     }
@@ -233,44 +230,65 @@ export default function Review({
       <section className="grid gap-6 md:grid-cols-2">
         <div className="space-y-3">
           <h2 className="text-lg font-semibold">Таблица соответствий</h2>
-          <p className="text-sm text-neutral-600 dark:text-neutral-400">
-            Нужна, чтобы потом вернуть настоящие значения. Хранится только в зашифрованном виде;
-            пароль нигде не сохраняется — без него восстановить данные нельзя.
-          </p>
-          <label className="block text-sm">
-            Пароль
-            <input
-              type="password"
-              autoComplete="new-password"
-              className={`${inputCls} mt-1`}
-              disabled={noMapping}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          <label className="block text-sm">
-            Повтор пароля
-            <input
-              type="password"
-              autoComplete="new-password"
-              className={`${inputCls} mt-1`}
-              disabled={noMapping}
-              value={repeat}
-              onChange={(e) => setRepeat(e.target.value)}
-            />
-          </label>
-          {passwordProblem && (password || repeat) && (
-            <p className="text-sm text-red-700 dark:text-red-300">{passwordProblem}</p>
+          {project ? (
+            <>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Новые значения добавятся в проект «{projectName}», уже известные получат прежние
+                псевдонимы. В предпросмотре выше нумерация примерная.
+              </p>
+              <label className="block text-sm">
+                Пароль проекта
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  className={`${inputCls} mt-1`}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Нужна, чтобы потом вернуть настоящие значения. Хранится только в зашифрованном
+                виде; пароль нигде не сохраняется — без него восстановить данные нельзя.
+              </p>
+              <label className="block text-sm">
+                Пароль
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  className={`${inputCls} mt-1`}
+                  disabled={noMapping}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                Повтор пароля
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  className={`${inputCls} mt-1`}
+                  disabled={noMapping}
+                  value={repeat}
+                  onChange={(e) => setRepeat(e.target.value)}
+                />
+              </label>
+              {passwordProblem && (password || repeat) && (
+                <p className="text-sm text-red-700 dark:text-red-300">{passwordProblem}</p>
+              )}
+              <label className="flex gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-neutral-900 dark:accent-neutral-100"
+                  checked={noMapping}
+                  onChange={(e) => setNoMapping(e.target.checked)}
+                />
+                Не сохранять таблицу соответствий (размаскировка будет невозможна)
+              </label>
+            </>
           )}
-          <label className="flex gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 size-4 accent-neutral-900 dark:accent-neutral-100"
-              checked={noMapping}
-              onChange={(e) => setNoMapping(e.target.checked)}
-            />
-            Не сохранять таблицу соответствий (размаскировка будет невозможна)
-          </label>
         </div>
 
         <div className="space-y-3">
@@ -288,7 +306,7 @@ export default function Review({
         </div>
       </section>
 
-      {maskError && <Alert tone="error">{maskError}</Alert>}
+      {shownError && <Alert tone="error">{shownError}</Alert>}
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-800">
         <Button variant="ghost" onClick={onBack} disabled={!!running}>
@@ -297,9 +315,9 @@ export default function Review({
         {running ? (
           <div className="flex w-72 items-center gap-3" role="status">
             <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
-              <div className="h-full bg-neutral-900 transition-all dark:bg-neutral-100" style={{ width: `${job.progress}%` }} />
+              <div className="h-full bg-neutral-900 transition-all dark:bg-neutral-100" style={{ width: `${job?.progress ?? 0}%` }} />
             </div>
-            <span className="text-sm tabular-nums">{job.progress}%</span>
+            <span className="text-sm tabular-nums">{job?.progress ?? 0}%</span>
           </div>
         ) : (
           <Button variant="primary" disabled={!!passwordProblem || !outName.trim()} onClick={start}>

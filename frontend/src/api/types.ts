@@ -151,6 +151,8 @@ export interface SheetConfig {
 
 export interface MaskConfig {
   categories: Categories
+  consistency_scope: 'file' | 'project'
+  project_id: string | null
   sheets: Record<string, SheetConfig>
   custom_terms: string[]
   sanitize: Sanitize
@@ -202,11 +204,43 @@ export interface JobSummary {
   warnings: string[]
 }
 
-export interface Job {
+export interface Job<S = JobSummary> {
   job_id: string
   status: 'queued' | 'running' | 'done' | 'error'
   progress: number
   artifacts: string[]
   error: string | null
-  summary: JobSummary | null
+  summary: S | null
+}
+
+export interface UnmaskReport {
+  format: string
+  tokens_found: number
+  tokens_replaced: number
+  unknown_tokens: number
+  unknown_sample: string[]
+  fakes_replaced: number
+  dates_restored: number
+  numbers_restored: number
+  missing_columns: string[]
+  notes: string[]
+}
+
+export interface Project {
+  id: string
+  name: string
+  created_at: string
+  updated_at: string
+  entries: number
+}
+
+export interface TemplateRule extends ColumnConfig {
+  header: string
+}
+
+export interface Template {
+  id: string
+  name: string
+  created_at: string
+  rules: TemplateRule[]
 }

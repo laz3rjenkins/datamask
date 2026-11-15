@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, errorText } from '../api/client'
-import type { CellSpans, FileInfo, MaskConfig, Meta, Preview, SuggestResult } from '../api/types'
+import type { CellSpans, FileInfo, MaskConfig, Meta, Preview, SuggestResult, Template } from '../api/types'
 import PreviewTable from '../components/PreviewTable'
 import Sidebar from '../components/Sidebar'
 import { Alert, Button, Spinner, Tabs, selectCls } from '../components/ui'
 import {
   applySuggestions,
+  applyTemplate,
   buildConfig,
   parseTerms,
   selectedCount,
+  templateRules,
   type Settings,
 } from '../lib/settings'
 
@@ -50,6 +52,13 @@ export default function Configure({
   const [spans, setSpans] = useState<CellSpans[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState({ suggest: false, preview: false, csv: false })
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [templateName, setTemplateName] = useState<string | null>(null) // null — форма закрыта
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.templates().then(setTemplates, () => setTemplates([]))
+  }, [])
   const patch = (p: Partial<Settings>) => setSettings((s) => ({ ...s, ...p }))
   const csvKey = file.csv ? `${file.csv.encoding}|${file.csv.delimiter}` : ''
   const terms = useMemo(() => parseTerms(settings.customTerms), [settings.customTerms])
@@ -170,7 +179,36 @@ export default function Configure({
               }}
             />
           )}
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex flex-wrap gap-2">
+            {templates.length > 0 && (
+              <select
+                aria-label="Применить шаблон"
+                className={`${selectCls} py-2`}
+                value=""
+                disabled={!suggestions}
+                onChange={(e) => {
+                  const t = templates.find((x) => x.id === e.target.value)
+                  if (!t || !suggestions) return
+                  const res = applyTemplate(settings.columns, t, suggestions)
+                  patch({ columns: res.columns })
+                  setNotice(
+                    res.matched
+                      ? `Шаблон «${t.name}» применён: колонок — ${res.matched}`
+                      : `В шаблоне «${t.name}» нет подходящих заголовков`,
+                  )
+                }}
+              >
+                <option value="">Применить шаблон…</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button disabled={!count || !suggestions} onClick={() => setTemplateName('')}>
+              Сохранить как шаблон
+            </Button>
             <Button
               disabled={!suggestions || !suggested}
               onClick={() => suggestions && patch({ columns: applySuggestions(settings.columns, suggestions) })}
@@ -219,6 +257,53 @@ export default function Configure({
               Определены автоматически. Если текст в таблице нечитаемый, поменяйте кодировку.
             </span>
           </div>
+        )}
+
+        {templateName !== null && suggestions && (
+          <form
+            className="flex flex-wrap items-center gap-2 text-sm"
+            onSubmit={async (e) => {
+              e.preventDefault()
+              const rules = templateRules(settings.columns, suggestions)
+              if (!rules.length) {
+                setNotice('У выбранных колонок нет заголовков: шаблон сохранить нельзя')
+                return
+              }
+              try {
+                const t = await api.createTemplate(templateName.trim(), rules)
+                setTemplates((ts) => [...ts, t])
+                setTemplateName(null)
+                setNotice(`Шаблон «${t.name}» сохранён: правил — ${rules.length}`)
+              } catch (err) {
+                setError(errorText(err))
+              }
+            }}
+          >
+            <label htmlFor="template-name">Название шаблона</label>
+            <input
+              id="template-name"
+              autoFocus
+              maxLength={100}
+              className={`${selectCls} w-64 py-1.5`}
+              placeholder="Например, «Выгрузка CRM»"
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+            />
+            <Button type="submit" variant="primary" disabled={!templateName.trim()}>
+              Сохранить
+            </Button>
+            <Button variant="ghost" onClick={() => setTemplateName(null)}>
+              Отмена
+            </Button>
+            <span className="text-xs text-neutral-500">
+              В шаблон попадут только заголовки колонок и выбранные способы, без данных.
+            </span>
+          </form>
+        )}
+        {notice && (
+          <p className="text-sm text-neutral-600 dark:text-neutral-400" role="status">
+            {notice}
+          </p>
         )}
 
         {error && <Alert tone="error">{error}</Alert>}
