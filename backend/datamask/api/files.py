@@ -10,12 +10,12 @@ from pathlib import Path, PurePath, PureWindowsPath
 from typing import IO, Literal
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from datamask.api.errors import ApiError
-from datamask.core.models import Categories, Risk
+from datamask.core.models import Categories, Category, EntityType, Risk, Span
 from datamask.core.pipeline import (
     SheetSuggestions,
     TextFinding,
@@ -24,6 +24,8 @@ from datamask.core.pipeline import (
     suggest_sheet,
 )
 from datamask.core.session import Session
+from datamask.detectors.base import DetectContext, find_spans
+from datamask.detectors.headers import thresholds
 from datamask.formats import adapter_for
 from datamask.formats.base import (
     Document,
@@ -63,6 +65,7 @@ class FileOut:
     sheets: list[SheetInfo]
     csv: CsvParams | None
     risks: list[Risk]
+    name_findings: list[EntityType]  # что нашлось в имени файла (само имя не возвращаем)
 
 
 class SuggestIn(BaseModel):
@@ -77,15 +80,44 @@ class SuggestOut:
     text_findings: list[TextFinding]
 
 
+class SpansIn(BaseModel):
+    """Подсветка находок в предпросмотре: шапка над заголовком и колонки «Свободный текст»."""
+
+    header_row: int | None = Field(None, ge=1)
+    columns: list[str] = []
+    scan_above_header: bool = True
+    categories: Categories = Categories()
+    custom_terms: list[str] = []
+    limit: int = Field(200, ge=1, le=1000)
+
+
+@dataclass
+class CellSpans:
+    row: int
+    col: int
+    spans: list[Span]
+
+
 class CsvOptionsIn(BaseModel):
     encoding: str | None = None
     delimiter: str | None = None
 
 
+def _name_findings(name: str) -> list[EntityType]:
+    stem = PurePath(name).stem.replace("_", " ")
+    ctx = DetectContext(thresholds().keyword_window)
+    return sorted({s.entity for s in find_spans(stem, enabled_detectors(list(Category), []), ctx)})
+
+
 def _out(e: FileEntry) -> FileOut:
     csv = CsvParams(e.doc.encoding, e.doc.delimiter) if isinstance(e.doc, CsvDocument) else None
     return FileOut(
-        e.id, "csv" if csv else "xlsx", e.adapter.sheets(e.doc), csv, e.adapter.risks(e.doc)
+        e.id,
+        "csv" if csv else "xlsx",
+        e.adapter.sheets(e.doc),
+        csv,
+        e.adapter.risks(e.doc),
+        _name_findings(e.original_name),
     )
 
 
@@ -202,3 +234,31 @@ def suggest(request: Request, file_id: str, body: SuggestIn) -> SuggestOut:
     found = sum(1 for s in sheets for c in s.columns if c.suggestion)
     logger.info("Подсказки для %s: колонок с подсказкой %d", file_id, found)
     return SuggestOut(sheets, findings)
+
+
+@router.post("/{file_id}/sheets/{sheet}/spans")
+def spans(request: Request, file_id: str, sheet: str, body: SpansIn) -> list[CellSpans]:
+    entry = _entry(request, file_id)
+    if sheet not in {s.name for s in entry.doc.sheets}:
+        raise ApiError(404, "sheet_not_found", "Лист не найден")
+    try:
+        cols = {entry.adapter.column_index(k) for k in body.columns}
+    except ValueError:
+        raise ApiError(422, "validation_error", "Неверный адрес колонки") from None
+    try:
+        p = entry.adapter.preview(entry.doc, sheet, body.header_row, body.limit)
+    except FormatError as e:
+        raise ApiError(400, "unreadable_file", str(e)) from e
+    detectors = enabled_detectors(body.categories.enabled(), body.custom_terms)
+    ctx = DetectContext(thresholds().keyword_window)
+    cells = [
+        (r.row, c, v)
+        for r in (p.above_header if body.scan_above_header else [])
+        for c, v in enumerate(r.values, start=1)
+    ]
+    cells += [(r.row, c, r.values[c - 1]) for r in p.rows for c in cols if c <= len(r.values)]
+    out = []
+    for row, col, value in cells:
+        if isinstance(value, str) and (found := find_spans(value, detectors, ctx)):
+            out.append(CellSpans(row, col, found))
+    return out

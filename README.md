@@ -31,4 +31,16 @@ uv run datamask mask clients.xlsx --config cfg.json --out clients_masked.xlsx \
 uv run pytest                                              # тесты, сеть запрещена
 uv run pytest -m slow -s                                   # бенчмарк A18 (100 тыс. строк)
 uv run ruff check . && uv run ruff format --check . && uv run mypy
+cd frontend && npm test && npm run lint                    # тесты и линтер интерфейса
 ```
+
+## Файлы для ручной проверки
+
+Синтетические таблицы (Faker `ru_RU`, реальных данных нет) создаются командой
+`uv run python scripts/make_fixtures.py` в папке `backend/tests/fixtures/` (её нет в git):
+
+- `clients.xlsx` — «грязная» книга: шапка отчёта над заголовком, скрытый лист и колонка,
+  примечания, сводная с кэшем, картинка, формулы, свободный текст с телефонами;
+- `clients_cp1251.csv` — CSV в Windows-1251 с `;`, коды с ведущими нулями (`007`);
+- `clients_utf8.csv` — CSV в UTF-8 с BOM;
+- `labeled/` — 20 размеченных таблиц для проверки подсказок (A4).

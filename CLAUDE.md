@@ -13,6 +13,6 @@
 
 - Тесты (сеть запрещена через addopts): `uv run pytest`; бенчмарк A18: `uv run pytest -m slow -s`
 - Линтеры: `uv run ruff check . && uv run ruff format --check . && uv run mypy`
-- Фронт: `cd frontend && npm run build`
+- Фронт: `cd frontend && npm run build`; тесты и линтер: `npm test && npm run lint`
 - Фикстуры (синтетические, генерируются и в тестах автоматически): `uv run python scripts/make_fixtures.py`
 - Запуск: `scripts/run.sh` (флаги: `--port N`, `--no-browser`)
