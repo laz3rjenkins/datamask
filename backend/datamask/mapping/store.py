@@ -38,8 +38,11 @@ class MappingStore:
         # masked → ключ: псевдоним однозначно указывает на исходник
         self._owner: dict[str, Key] = {}
         self._counters: dict[str, int] = {}
+        # область («Лист!B» или «*») → {"days"/"factor": …, "columns": [{sheet, column, header,
+        # header_row}]}: по колонкам даты и числа восстанавливаются при размаскировке
         self.date_shifts: dict[str, dict[str, Any]] = {}
         self.scale_factors: dict[str, dict[str, Any]] = {}
+        self.custom_terms: list[str] = []  # свой словарь проекта
 
     # ---- значения ----
 
@@ -69,45 +72,53 @@ class MappingStore:
         digest = hmac.new(self.secret, f"{label}:{scope}".encode(), hashlib.sha256).digest()
         return int.from_bytes(digest[:8], "big")
 
+    @staticmethod
+    def _param(
+        table: dict[str, dict[str, Any]], scope: str, name: str, value: Any, info: dict[str, str]
+    ) -> Any:
+        item = table.setdefault(scope, {name: value, "columns": []})
+        if info and info not in item["columns"]:
+            item["columns"].append(info)
+        return item[name]
+
     def date_shift(self, scope: str, info: dict[str, str]) -> int:
-        if scope not in self.date_shifts:
-            v = self._derive("shift", scope) % 730
-            days = v - 365 if v < 365 else v - 364  # ±1..365, без нуля
-            self.date_shifts[scope] = {**info, "days": days}
-        return int(self.date_shifts[scope]["days"])
+        v = self._derive("shift", scope) % 730
+        days = v - 365 if v < 365 else v - 364  # ±1..365, без нуля
+        return int(self._param(self.date_shifts, scope, "days", days, info))
 
     def scale_factor(self, scope: str, info: dict[str, str]) -> float:
-        if scope not in self.scale_factors:
-            factor = 0.5 + (self._derive("scale", scope) % 15001) / 10000  # 0,5–2,0
-            self.scale_factors[scope] = {**info, "factor": factor}
-        return float(self.scale_factors[scope]["factor"])
+        factor = 0.5 + (self._derive("scale", scope) % 15001) / 10000  # 0,5–2,0
+        return float(self._param(self.scale_factors, scope, "factor", factor, info))
 
     # ---- сериализация ----
 
-    def to_json(self) -> bytes:
-        return json.dumps(
-            {
-                "version": VERSION,
-                "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
-                "project": self.project,
-                "entries": [asdict(e) for e in self.entries],
-                "date_shifts": self.date_shifts,
-                "scale_factors": self.scale_factors,
-            },
-            ensure_ascii=False,
-        ).encode("utf-8")
+    def to_json(self, include_secret: bool = False) -> bytes:
+        """include_secret — только для файла проекта: секрет нужен, чтобы фейки, хеши и сдвиги
+        в следующих файлах проекта совпали. В выгружаемый .dmmap секрет не попадает."""
+        data: dict[str, Any] = {
+            "version": VERSION,
+            "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "project": self.project,
+            "entries": [asdict(e) for e in self.entries],
+            "date_shifts": self.date_shifts,
+            "scale_factors": self.scale_factors,
+            "custom_terms": self.custom_terms,
+        }
+        if include_secret:
+            data["secret"] = self.secret.hex()
+        return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
-    def encrypt(self, password: str) -> bytes:
+    def encrypt(self, password: str, include_secret: bool = False) -> bytes:
         if len(password) < MIN_PASSWORD:
             raise MappingError(f"Пароль должен быть не короче {MIN_PASSWORD} символов")
-        return encrypt(self.to_json(), password)
+        return encrypt(self.to_json(include_secret), password)
 
     @classmethod
     def from_json(cls, data: bytes, secret: bytes = b"") -> MappingStore:
         raw = json.loads(data)
         if raw.get("version") != VERSION:
             raise MappingError("Неподдерживаемая версия таблицы соответствий")
-        store = cls(secret, raw.get("project"))
+        store = cls(secret or bytes.fromhex(raw.get("secret", "")), raw.get("project"))
         for e in raw["entries"]:
             entity = EntityType(e["entity"])
             masked = e["masked"]
@@ -118,6 +129,7 @@ class MappingStore:
             store.add(key, e["original"], masked, e["method"])
         store.date_shifts = raw.get("date_shifts", {})
         store.scale_factors = raw.get("scale_factors", {})
+        store.custom_terms = list(raw.get("custom_terms", []))
         return store
 
     @classmethod

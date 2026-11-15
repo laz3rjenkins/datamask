@@ -18,15 +18,26 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from datamask import __version__, security
-from datamask.api import files, mask
+from datamask.api import files, mask, projects
 from datamask.api.errors import install_error_handlers
 from datamask.api.routes import router
 from datamask.core.session import Session
+from datamask.mapping.projects import ProjectRepo
+from datamask.templates import TemplateRepo
 
 HOST = "127.0.0.1"  # не настраивается: только локальная петля (SPEC §4)
 DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 DEFAULT_MAX_UPLOAD_MB = 50
 OFFLINE_ENV = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "DO_NOT_TRACK": "1"}
+
+
+def default_data_dir() -> Path:
+    """Папка данных приложения: проекты (зашифрованы) и шаблоны."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "datamask"
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA") or Path.home()) / "datamask"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "datamask"
 
 
 def create_app(
@@ -35,6 +46,7 @@ def create_app(
     session: Session,
     dist: Path = DIST,
     max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB,
+    data_dir: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="datamask", version=__version__, docs_url=None, redoc_url=None, openapi_url=None
@@ -42,11 +54,15 @@ def create_app(
     app.state.session = session
     app.state.files = {}
     app.state.max_upload_bytes = max_upload_mb * 2**20
+    data_dir = data_dir or default_data_dir()
+    app.state.projects = ProjectRepo(data_dir / "projects")
+    app.state.templates = TemplateRepo(data_dir / "templates.json")
     install_error_handlers(app)
     security.install(app, token, port)
     app.include_router(router)
     app.include_router(files.router)
     app.include_router(mask.router)
+    app.include_router(projects.router)
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     return app

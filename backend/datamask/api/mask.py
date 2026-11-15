@@ -14,12 +14,20 @@ from pydantic import BaseModel
 
 from datamask.api.errors import ApiError
 from datamask.api.files import FileEntry, _entry
+from datamask.api.projects import project_meta, repo
 from datamask.core.models import MaskConfig, UserError
-from datamask.core.pipeline import ConfigError, DryRun, dry_run, run_mask, validate_config
+from datamask.core.pipeline import (
+    ConfigError,
+    DryRun,
+    MaskResult,
+    dry_run,
+    run_mask,
+    validate_config,
+)
 from datamask.core.session import Job, Session
 from datamask.formats.base import OpenOptions
 from datamask.formats.csv import CsvDocument
-from datamask.mapping.crypto import MIN_PASSWORD, write_atomic
+from datamask.mapping.crypto import MIN_PASSWORD, MappingError, write_atomic
 from datamask.mapping.store import MappingStore
 from datamask.report import build_report, render_html
 
@@ -56,6 +64,8 @@ def _validate(request: Request, file_id: str, config: MaskConfig) -> FileEntry:
         validate_config(config, entry.adapter, entry.doc)
     except ConfigError as e:
         raise ApiError(422, "invalid_config", str(e)) from e
+    if config.project_id:
+        project_meta(request, config.project_id)
     return entry
 
 
@@ -72,7 +82,16 @@ def dry_run_endpoint(request: Request, file_id: str, config: MaskConfig) -> DryR
 def mask(request: Request, file_id: str, body: MaskIn) -> dict[str, str]:
     entry = _validate(request, file_id, body.config)
     config, password = body.config, body.password
-    if config.save_mapping and (not password or len(password) < MIN_PASSWORD):
+    project_id = config.project_id
+    projects = repo(request)
+    if project_id:
+        # Пароль проверяем сразу, а не в задаче: ошибка видна до запуска.
+        try:
+            projects.load(project_id, password or "")
+        except MappingError:
+            raise ApiError(422, "wrong_password", "Неверный пароль проекта") from None
+        config = config.model_copy(update={"save_mapping": True})  # проект накапливает записи
+    elif config.save_mapping and (not password or len(password) < MIN_PASSWORD):
         raise ApiError(
             422, "weak_password", f"Пароль таблицы соответствий — не короче {MIN_PASSWORD} символов"
         )
@@ -87,17 +106,32 @@ def mask(request: Request, file_id: str, body: MaskIn) -> dict[str, str]:
     if isinstance(entry.doc, CsvDocument):
         options = OpenOptions(entry.doc.encoding, entry.doc.delimiter, writable=True)
 
-    def work(job: Job) -> None:
-        started = time.monotonic()
+    def run(job: Job, store: MappingStore, cfg: MaskConfig) -> MaskResult:
         doc = entry.adapter.open(entry.path, options)
-        store = MappingStore(entry.secret)
-        result = run_mask(entry.adapter, doc, config, store, lambda p: setattr(job, "progress", p))
+        result = run_mask(entry.adapter, doc, cfg, store, lambda p: setattr(job, "progress", p))
         masked = job.folder / f"masked{suffix}"
         entry.adapter.save(doc, masked)
         job.progress = 90
         job.artifacts["masked"] = masked
         job.download_names["masked"] = out_name
-        if config.save_mapping:
+        return result
+
+    def work(job: Job) -> None:
+        started = time.monotonic()
+        cfg = config
+        if project_id:
+            assert password is not None
+            with projects.lock:  # прочитал → дополнил → записал, без гонок с другой задачей
+                store = projects.load(project_id, password)
+                new_terms = [t.strip() for t in config.custom_terms if t.strip()]
+                store.custom_terms = list(dict.fromkeys([*store.custom_terms, *new_terms]))
+                cfg = config.model_copy(update={"custom_terms": store.custom_terms})
+                result = run(job, store, cfg)
+                projects.save(project_id, store, password)
+        else:
+            store = MappingStore(entry.secret)
+            result = run(job, store, cfg)
+        if cfg.save_mapping:
             assert password is not None
             path = job.folder / "mapping.dmmap"
             write_atomic(path, store.encrypt(password))
@@ -106,9 +140,9 @@ def mask(request: Request, file_id: str, body: MaskIn) -> dict[str, str]:
         report = build_report(
             entry.id,
             suffix.lstrip("."),
-            config,
+            cfg,
             result,
-            config.save_mapping,
+            cfg.save_mapping,
             time.monotonic() - started,
         )
         for kind, name, data in (

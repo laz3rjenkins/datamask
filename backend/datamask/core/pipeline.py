@@ -170,7 +170,7 @@ class ConfigError(UserError):
 Resolved = dict[str, dict[int, ColumnConfig]]  # лист → номер колонки → настройка
 
 
-def _check_params(cc: ColumnConfig, where: str) -> None:
+def check_params(cc: ColumnConfig, where: str) -> None:
     p = cc.params
     if "prefix" in p and not _PREFIX.fullmatch(str(p["prefix"])):
         raise ConfigError(f"{where}: префикс — только буквы, до 30 символов")
@@ -185,8 +185,8 @@ def _check_params(cc: ColumnConfig, where: str) -> None:
 
 
 def validate_config(config: MaskConfig, adapter: FormatAdapter, doc: Document) -> Resolved:
-    if config.consistency_scope == "project" or config.project_id:
-        raise ConfigError("Согласованность по проекту появится вместе с проектами (этап M6)")
+    if (config.consistency_scope == "project") != bool(config.project_id):
+        raise ConfigError("Для согласованности по проекту выберите проект")
     names = {s.name for s in doc.sheets}
     resolved: Resolved = {}
     for sheet, sc in config.sheets.items():
@@ -204,7 +204,7 @@ def validate_config(config: MaskConfig, adapter: FormatAdapter, doc: Document) -
                 raise ConfigError(
                     f"{where}: способ «{method}» не подходит для типа «{ENTITY_LABELS[cc.entity]}»"
                 )
-            _check_params(cc, where)
+            check_params(cc, where)
             cols[idx] = cc
         resolved[sheet] = cols
     return resolved
@@ -277,13 +277,21 @@ def _headers(
 
 
 def _collect_originals(
-    adapter: FormatAdapter, doc: Document, config: MaskConfig, resolved: Resolved
+    adapter: FormatAdapter,
+    doc: Document,
+    config: MaskConfig,
+    resolved: Resolved,
+    store: MappingStore,
 ) -> dict[EntityType, set[str]]:
-    """Все исходные значения типов, для которых выбран фейк: фейк не должен с ними совпасть."""
+    """Все исходные значения типов, для которых выбран фейк (в файле и уже известные проекту):
+    фейк не должен с ними совпасть, иначе сломается размаскировка."""
     fake = {cc.entity for cols in resolved.values() for cc in cols.values() if cc.method == "fake"}
     originals: dict[EntityType, set[str]] = defaultdict(set)
     if not fake:
         return originals
+    for e in store.entries:
+        if (entity := EntityType(e.entity)) in fake:
+            originals[entity].add(normalize(entity, e.original))
     for sheet, cols in resolved.items():
         hr = config.sheets[sheet].header_row
         for cell in adapter.iter_cells(doc, sheet):
@@ -366,7 +374,7 @@ def run_mask(
     """doc открыт с OpenOptions(writable=True). Сохранение — adapter.save() после вызова."""
     resolved = validate_config(config, adapter, doc)
     headers = _headers(adapter, doc, config)
-    engine = Engine(config, store, _collect_originals(adapter, doc, config, resolved))
+    engine = Engine(config, store, _collect_originals(adapter, doc, config, resolved, store))
     progress(10)
 
     stats: dict[tuple[str, int], ColumnStats] = {
@@ -472,9 +480,8 @@ def dry_run(
 ) -> DryRun:
     """Ничего не сохраняет: временная таблица соответствий выбрасывается."""
     resolved = validate_config(config, adapter, doc)
-    engine = Engine(
-        config, MappingStore(secret), _collect_originals(adapter, doc, config, resolved)
-    )
+    store = MappingStore(secret)
+    engine = Engine(config, store, _collect_originals(adapter, doc, config, resolved, store))
     sheets, summary = [], []
     for info in doc.sheets:
         sc = config.sheets.get(info.name)
@@ -542,3 +549,4 @@ def dry_run(
         ]
     warnings = [FREE_TEXT_WARNING] + [r.message for r in doc.risks]
     return DryRun(sheets, summary, warnings)
+

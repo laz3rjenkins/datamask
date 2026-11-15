@@ -42,6 +42,7 @@ def make_client(session: Session, tmp_path: Path):
             session,
             dist=dist if frontend else tmp_path / "none",
             max_upload_mb=max_upload_mb,
+            data_dir=tmp_path / "data",
         )
         client = TestClient(app, base_url=f"http://127.0.0.1:{PORT}")
         if authed:
