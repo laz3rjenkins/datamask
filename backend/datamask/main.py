@@ -55,6 +55,12 @@ def create_app(
 def bind_socket(port: int) -> socket.socket:
     # Сокет создаём сами и отдаём uvicorn: нет гонки между выбором порта и запуском.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if os.name == "nt":
+        # На Windows SO_REUSEADDR позволил бы другому процессу занять тот же порт
+        sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+    else:
+        # Иначе после перезапуска с --port N порт занят ~минуту (соединения в TIME_WAIT)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((HOST, port))
     return sock
 
