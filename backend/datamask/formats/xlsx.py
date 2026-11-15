@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
-from datamask.core.models import CellKind, CellRef, CellValue, Risk, kind_of
+from datamask.core.models import CellKind, CellRef, CellValue, Risk, TextFragment, kind_of
 from datamask.formats.base import (
     HEADER_SCAN_ROWS,
     Document,
@@ -183,6 +183,43 @@ def _inspect(data: bytes) -> tuple[list[SheetInfo], list[Risk]]:
     return sheets, risks
 
 
+def _text(el: Element) -> str:
+    return "".join(t.text or "" for t in el.iter() if _local(t.tag) == "t")
+
+
+def _fragments(data: bytes) -> Iterator[TextFragment]:
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        wb_part = next(
+            (r.target for r in _rels(zf, "").values() if r.type == "officeDocument" and r.target),
+            "xl/workbook.xml",
+        )
+        wb_rels = _rels(zf, wb_part)
+        for el in ET.fromstring(zf.read(wb_part)).iter():
+            tag = _local(el.tag)
+            if tag == "definedName" and el.get("name"):
+                yield TextFragment("defined_name", el.get("name", ""))
+            if tag != "sheet":
+                continue
+            name = el.get("name", "")
+            yield TextFragment("sheet_name", name, name)
+            rel = wb_rels.get(_attr(el, "id") or "")
+            if not rel or not rel.target:
+                continue
+            for r in _rels(zf, rel.target).values():
+                if r.type != "comments" or not r.target:
+                    continue
+                root = ET.fromstring(zf.read(r.target))
+                authors = [
+                    _text(a) or (a.text or "") for a in root.iter() if _local(a.tag) == "author"
+                ]
+                for a in authors:
+                    if a.strip():
+                        yield TextFragment("comment_author", a, name)
+                for c in root.iter():
+                    if _local(c.tag) == "comment":
+                        yield TextFragment("comment", _text(c), name, c.get("ref"))
+
+
 @dataclass
 class XlsxDocument(Document):
     # Файл целиком в памяти: read_only-книга не держит открытый файл (Windows не дал бы удалить).
@@ -220,6 +257,13 @@ class XlsxAdapter:
     def risks(self, doc: Document) -> list[Risk]:
         return doc.risks
 
+    def column_key(self, index: int) -> str:
+        return str(get_column_letter(index))
+
+    def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]:
+        assert isinstance(doc, XlsxDocument)
+        return _fragments(doc.data)
+
     def _ws(self, doc: Document, sheet: str) -> Any:
         assert isinstance(doc, XlsxDocument)
         doc.sheet(sheet)  # KeyError для неизвестного листа
@@ -236,7 +280,7 @@ class XlsxAdapter:
 
     def preview(self, doc: Document, sheet: str, header_row: int | None, limit: int) -> Preview:
         raw = list(self._rows(doc, sheet, (header_row or HEADER_SCAN_ROWS) + limit))
-        return build_preview(doc.sheet(sheet), raw, header_row, limit, get_column_letter)
+        return build_preview(doc.sheet(sheet), raw, header_row, limit, self.column_key)
 
     def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]:
         for r, row in enumerate(self._rows(doc, sheet), start=1):

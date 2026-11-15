@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from datamask.core.models import CellKind, CellRef, CellValue, Risk
+from datamask.core.models import CellKind, CellRef, CellValue, Risk, TextFragment
 
 HEADER_SCAN_ROWS = 50
 
@@ -77,8 +77,10 @@ class FormatAdapter(Protocol):
 
     def open(self, path: Path, options: OpenOptions) -> Document: ...
     def sheets(self, doc: Document) -> list[SheetInfo]: ...
+    def column_key(self, index: int) -> str: ...  # буква для XLSX, номер для CSV
     def preview(self, doc: Document, sheet: str, header_row: int | None, limit: int) -> Preview: ...
     def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]: ...
+    def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]: ...
     def risks(self, doc: Document) -> list[Risk]: ...
 
 

@@ -10,6 +10,7 @@ dependencies = [
     "fastapi",
     "openpyxl>=3.1.5",
     "python-multipart>=0.0.33",
+    "pyyaml>=6.0.3",
     "uvicorn",
 ]
 
@@ -26,6 +27,8 @@ dev = [
     "types-openpyxl>=3.1.5.20261017",
     "types-defusedxml>=0.7.0.20260504",
     "pillow>=13.0.0",
+    "types-pyyaml>=6.0.12.20261113",
+    "hypothesis>=6.170.15",
 ]
 
 [build-system]
@@ -61,5 +64,5 @@ strict = true
 exclude = ["*.md"]
 
 [tool.ruff.lint.per-file-ignores]
-"backend/tests/*" = ["S603"]
+"backend/tests/*" = ["S603", "S311"]
 "scripts/*" = ["S311"]  # детерминированные синтетические данные, не криптография

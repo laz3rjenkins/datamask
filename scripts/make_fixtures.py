@@ -98,6 +98,16 @@ def person(fake: Faker, rnd: random.Random) -> Person:
     )
 
 
+def org(fake: Faker, rnd: random.Random) -> str:
+    """Faker часто даёт названия без ОПФ; в выгрузках контрагенты почти всегда с ООО/АО/ИП."""
+    if rnd.random() < 0.2:
+        return (
+            f"ИП {fake.last_name_male()} {fake.first_name_male()[0]}.{fake.middle_name_male()[0]}."
+        )
+    name = fake.last_name_male() + rnd.choice(["", "-Трейд", " Групп", "Строй", "Снаб"])
+    return f"{rnd.choice(['ООО', 'АО', 'ПАО', 'ЗАО'])} «{name}»"
+
+
 def free_text(fake: Faker, rnd: random.Random, p: Person) -> str:
     return rnd.choice(
         [
@@ -442,7 +452,7 @@ def value(kind: str, fake: Faker, rnd: random.Random, p: Person, as_csv: bool) -
         case "ip":
             return fake.ipv4_public()
         case "company":
-            return fake.company()
+            return org(fake, rnd)
         case "inn_org":
             return fake.businesses_inn()
         case "ogrn":

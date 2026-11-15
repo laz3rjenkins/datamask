@@ -15,7 +15,14 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from datamask.api.errors import ApiError
-from datamask.core.models import Risk
+from datamask.core.models import Category, Risk
+from datamask.core.pipeline import (
+    SheetSuggestions,
+    TextFinding,
+    enabled_detectors,
+    scan_fragments,
+    suggest_sheet,
+)
 from datamask.core.session import Session
 from datamask.formats import adapter_for
 from datamask.formats.base import (
@@ -54,6 +61,24 @@ class FileOut:
     sheets: list[SheetInfo]
     csv: CsvParams | None
     risks: list[Risk]
+
+
+class CategoriesIn(BaseModel):
+    personal: bool = True
+    financial: bool = True
+    commercial: bool = False
+
+
+class SuggestIn(BaseModel):
+    categories: CategoriesIn = CategoriesIn()
+    header_rows: dict[str, int] = {}  # лист → строка заголовка; нет — определить автоматически
+    custom_terms: list[str] = []
+
+
+@dataclass
+class SuggestOut:
+    sheets: list[SheetSuggestions]
+    text_findings: list[TextFinding]
 
 
 class CsvOptionsIn(BaseModel):
@@ -159,3 +184,26 @@ def preview(
         return entry.adapter.preview(entry.doc, sheet, header_row, limit)
     except FormatError as e:
         raise ApiError(400, "unreadable_file", str(e)) from e
+
+
+@router.post("/{file_id}/suggest")
+def suggest(request: Request, file_id: str, body: SuggestIn) -> SuggestOut:
+    entry = _entry(request, file_id)
+    unknown = set(body.header_rows) - {s.name for s in entry.doc.sheets}
+    if unknown:
+        raise ApiError(404, "sheet_not_found", "Лист не найден")
+    if any(n < 1 for n in body.header_rows.values()):
+        raise ApiError(422, "validation_error", "Строка заголовка должна быть не меньше 1")
+    cats = [Category(k) for k, on in body.categories.model_dump().items() if on]
+    detectors = enabled_detectors(cats, body.custom_terms)
+    try:
+        sheets = [
+            suggest_sheet(entry.adapter, entry.doc, s.name, body.header_rows.get(s.name), detectors)
+            for s in entry.doc.sheets
+        ]
+        findings = scan_fragments(entry.adapter, entry.doc, detectors)
+    except FormatError as e:
+        raise ApiError(400, "unreadable_file", str(e)) from e
+    found = sum(1 for s in sheets for c in s.columns if c.suggestion)
+    logger.info("Подсказки для %s: колонок с подсказкой %d", file_id, found)
+    return SuggestOut(sheets, findings)

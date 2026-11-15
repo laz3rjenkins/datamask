@@ -10,7 +10,7 @@ from pathlib import Path
 
 from charset_normalizer import from_bytes
 
-from datamask.core.models import CellRef, Risk
+from datamask.core.models import CellRef, Risk, TextFragment
 from datamask.formats.base import (
     HEADER_SCAN_ROWS,
     Document,
@@ -96,6 +96,12 @@ class CsvAdapter:
     def risks(self, doc: Document) -> list[Risk]:
         return doc.risks
 
+    def column_key(self, index: int) -> str:
+        return str(index)
+
+    def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]:
+        return iter(())  # в CSV текст есть только в ячейках
+
     def _rows(self, doc: Document, sheet: str) -> Iterator[list[str]]:
         assert isinstance(doc, CsvDocument)
         doc.sheet(sheet)
@@ -109,7 +115,7 @@ class CsvAdapter:
             raw.append([(v, "string" if v else "empty") for v in row])
             if len(raw) >= max_row:
                 break
-        return build_preview(doc.sheet(sheet), raw, header_row, limit, str)
+        return build_preview(doc.sheet(sheet), raw, header_row, limit, self.column_key)
 
     def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]:
         for r, row in enumerate(self._rows(doc, sheet), start=1):
