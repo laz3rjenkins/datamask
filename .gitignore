@@ -8,3 +8,4 @@ frontend/node_modules/
 frontend/dist/
 *.dmmap
 .DS_Store
+backend/tests/fixtures/

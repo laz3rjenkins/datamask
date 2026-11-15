@@ -5,6 +5,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+
+class ApiError(Exception):
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(code)
+        self.status, self.code, self.message = status, code, message
+
+
 _HTTP_MESSAGES = {
     404: ("not_found", "Не найдено"),
     405: ("method_not_allowed", "Метод не поддерживается"),
@@ -16,6 +23,10 @@ def error_response(status: int, code: str, message: str) -> JSONResponse:
 
 
 def install_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(ApiError)
+    async def api_error(_: Request, exc: ApiError) -> JSONResponse:
+        return error_response(exc.status, exc.code, exc.message)
+
     @app.exception_handler(HTTPException)
     async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
         code, message = _HTTP_MESSAGES.get(exc.status_code, ("http_error", "Ошибка запроса"))

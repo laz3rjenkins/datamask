@@ -14,5 +14,6 @@ def health() -> dict[str, str]:
 @router.delete("/session")
 def clear_session(request: Request) -> dict[str, str]:
     session: Session = request.app.state.session
+    request.app.state.files.clear()
     session.clear()
     return {"status": "cleared"}

@@ -14,4 +14,5 @@
 - Тесты (сеть запрещена через addopts): `uv run pytest`
 - Линтеры: `uv run ruff check . && uv run ruff format --check . && uv run mypy`
 - Фронт: `cd frontend && npm run build`
+- Фикстуры (синтетические, генерируются и в тестах автоматически): `uv run python scripts/make_fixtures.py`
 - Запуск: `scripts/run.sh` (флаги: `--port N`, `--no-browser`)

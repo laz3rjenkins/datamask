@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Локальное маскирование персональных данных в XLSX/CSV"
 requires-python = ">=3.11"
 dependencies = [
+    "charset-normalizer>=3.5.2",
+    "defusedxml>=0.7.1",
+    "faker>=40.54.0",
     "fastapi",
+    "openpyxl>=3.1.5",
+    "python-multipart>=0.0.33",
     "uvicorn",
 ]
 
@@ -18,6 +23,9 @@ dev = [
     "ruff",
     "mypy",
     "httpx2>=2.16.0",
+    "types-openpyxl>=3.1.5.20261017",
+    "types-defusedxml>=0.7.0.20260504",
+    "pillow>=13.0.0",
 ]
 
 [build-system]
@@ -54,3 +62,4 @@ exclude = ["*.md"]
 
 [tool.ruff.lint.per-file-ignores]
 "backend/tests/*" = ["S603"]
+"scripts/*" = ["S311"]  # детерминированные синтетические данные, не криптография
