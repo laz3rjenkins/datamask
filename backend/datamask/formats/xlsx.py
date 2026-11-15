@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import posixpath
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -14,10 +14,20 @@ from xml.etree.ElementTree import Element, ParseError
 
 from defusedxml import ElementTree as ET  # защита от XML-бомб во входных файлах
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
+from openpyxl.comments import Comment
+from openpyxl.packaging.custom import CustomPropertyList
+from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
-from datamask.core.models import CellKind, CellRef, CellValue, Risk, TextFragment, kind_of
+from datamask.core.models import (
+    CellKind,
+    CellRef,
+    CellValue,
+    Risk,
+    SanitizePolicy,
+    TextFragment,
+    kind_of,
+)
 from datamask.formats.base import (
     HEADER_SCAN_ROWS,
     Document,
@@ -225,6 +235,7 @@ class XlsxDocument(Document):
     # Файл целиком в памяти: read_only-книга не держит открытый файл (Windows не дал бы удалить).
     data: bytes = b""
     workbook: Any = None  # openpyxl read_only Workbook, открывается при первом чтении
+    writable: Any = None  # полная книга для маскирования (OpenOptions.writable)
 
 
 def _cell(cell: Any) -> tuple[CellValue, CellKind]:
@@ -238,6 +249,24 @@ def _cell(cell: Any) -> tuple[CellValue, CellKind]:
     return v, kind_of(v)
 
 
+def _wipe_chart_caches(chart: Any) -> int:
+    """Диаграммы хранят копию значений подписей и рядов (strCache/numCache)."""
+    wiped = 0
+    for series in getattr(chart, "series", None) or []:
+        for part in (series.tx, series.cat, series.val, getattr(series, "xVal", None),
+                     getattr(series, "yVal", None)):  # fmt: skip
+            for ref_name in ("strRef", "numRef", "multiLvlStrRef"):
+                ref = getattr(part, ref_name, None) if part is not None else None
+                for cache in ("strCache", "numCache", "multiLvlStrCache"):
+                    if ref is not None and getattr(ref, cache, None) is not None:
+                        setattr(ref, cache, None)
+                        wiped += 1
+    for sub in getattr(chart, "_charts", None) or []:
+        if sub is not chart:
+            wiped += _wipe_chart_caches(sub)
+    return wiped
+
+
 class XlsxAdapter:
     extensions: tuple[str, ...] = (".xlsx",)
 
@@ -249,7 +278,13 @@ class XlsxAdapter:
             raise FormatError("Файл повреждён или это не XLSX") from e
         if not sheets:
             raise FormatError("В книге нет листов с ячейками")
-        return XlsxDocument(path, sheets, risks, data)
+        doc = XlsxDocument(path, sheets, risks, data)
+        if options.writable:
+            try:
+                doc.writable = load_workbook(BytesIO(data))
+            except Exception as e:
+                raise FormatError("Файл повреждён или это не XLSX") from e
+        return doc
 
     def sheets(self, doc: Document) -> list[SheetInfo]:
         return doc.sheets
@@ -274,6 +309,9 @@ class XlsxAdapter:
                 raise FormatError("Файл повреждён или это не XLSX") from e
         return doc.workbook[sheet]
 
+    def column_index(self, key: str) -> int:
+        return int(column_index_from_string(key.upper()))
+
     def _rows(self, doc: Document, sheet: str, max_row: int | None = None) -> Iterator[RawRow]:
         for row in self._ws(doc, sheet).iter_rows(min_row=1, max_row=max_row):
             yield [_cell(c) for c in row]
@@ -283,7 +321,97 @@ class XlsxAdapter:
         return build_preview(doc.sheet(sheet), raw, header_row, limit, self.column_key)
 
     def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]:
+        assert isinstance(doc, XlsxDocument)
+        if doc.writable is not None:
+            ws = doc.writable[sheet]
+            # Только существующие ячейки: iter_rows создал бы пустые на весь диапазон.
+            for (r, c), cell in sorted(ws._cells.items()):
+                v, k = _cell(cell)
+                if k != "empty":
+                    yield CellRef(sheet, r, c, v, k)
+            return
         for r, row in enumerate(self._rows(doc, sheet), start=1):
             for c, (v, k) in enumerate(row, start=1):
                 if k != "empty":
                     yield CellRef(sheet, r, c, v, k)
+
+    def set_value(self, doc: Document, ref: CellRef, value: CellValue) -> None:
+        assert isinstance(doc, XlsxDocument) and doc.writable is not None
+        cell = doc.writable[ref.sheet].cell(ref.row, ref.col)
+        cell.value = value
+        if isinstance(value, str) and value.startswith("="):
+            cell.data_type = "s"  # текст, а не формула
+        if cell.hyperlink is not None:
+            cell.hyperlink = None  # mailto: и т.п. хранят исходное значение
+
+    def sanitize(
+        self, doc: Document, policy: SanitizePolicy, mask_text: Callable[[str], str]
+    ) -> list[str]:
+        assert isinstance(doc, XlsxDocument) and doc.writable is not None
+        wb = doc.writable
+        actions = []
+
+        props = wb.properties
+        for attr in (
+            "creator", "lastModifiedBy", "title", "subject", "description", "keywords",
+            "category", "identifier", "contentStatus", "version", "language",
+        ):  # fmt: skip
+            setattr(props, attr, None)
+        wb.custom_doc_props = CustomPropertyList()
+        # docProps/app.xml (компания, руководитель) openpyxl пересоздаёт при сохранении
+        actions.append("Метаданные очищены: автор, кто изменил, название, тема, компания")
+
+        if policy.hidden_sheets == "remove":
+            hidden = [ws for ws in wb.worksheets if ws.sheet_state != "visible"]
+            if len(hidden) == len(wb.worksheets):
+                hidden = hidden[1:]
+            for ws in hidden:
+                wb.remove(ws)
+                for name in [
+                    n for n, dn in wb.defined_names.items() if ws.title in str(dn.attr_text)
+                ]:
+                    del wb.defined_names[name]
+            if hidden:
+                wb.active = 0
+                actions.append(f"Удалены скрытые листы: {len(hidden)}")
+
+        comments = pivots = images = charts = 0
+        for ws in wb.worksheets:
+            for cell in ws._cells.values():
+                if cell.comment is None:
+                    continue
+                comments += 1
+                if policy.comments == "remove":
+                    cell.comment = None
+                else:
+                    cell.comment = Comment(mask_text(cell.comment.text or ""), "datamask")
+            if ws._pivots:
+                pivots += len(ws._pivots)
+                ws._pivots = []
+            if policy.images == "remove" and ws._images:
+                images += len(ws._images)
+                ws._images = []
+            for chart in ws._charts:
+                charts += _wipe_chart_caches(chart)
+        if comments:
+            actions.append(
+                f"Примечания удалены: {comments}"
+                if policy.comments == "remove"
+                else f"Примечания проверены как свободный текст, авторы скрыты: {comments}"
+            )
+        if pivots:
+            actions.append(
+                f"Сводные таблицы удалены вместе с кэшем исходных данных: {pivots}. "
+                "Значения на их листах остались обычными ячейками, сводную нужно построить заново"
+            )
+        if images:
+            actions.append(f"Удалены изображения: {images}")
+        if charts:
+            actions.append(f"Очищен кэш данных в диаграммах: {charts}")
+        wb.calculation.fullCalcOnLoad = True
+        actions.append("Формулы будут пересчитаны при открытии файла")
+        return actions
+
+    def save(self, doc: Document, path: Path) -> None:
+        assert isinstance(doc, XlsxDocument) and doc.writable is not None
+        doc.writable.save(path)

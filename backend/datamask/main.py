@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from datamask import __version__, security
-from datamask.api import files
+from datamask.api import files, mask
 from datamask.api.errors import install_error_handlers
 from datamask.api.routes import router
 from datamask.core.session import Session
@@ -46,6 +46,7 @@ def create_app(
     security.install(app, token, port)
     app.include_router(router)
     app.include_router(files.router)
+    app.include_router(mask.router)
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     return app
@@ -59,7 +60,13 @@ def bind_socket(port: int) -> socket.socket:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="datamask")
+    if sys.argv[1:2] == ["mask"]:
+        from datamask.cli import mask_main
+
+        sys.exit(mask_main(sys.argv[2:]))
+    parser = argparse.ArgumentParser(
+        prog="datamask", epilog="Маскирование из командной строки: datamask mask --help"
+    )
     parser.add_argument("--port", type=int, default=0, help="порт (по умолчанию случайный)")
     parser.add_argument("--no-browser", action="store_true", help="не открывать браузер")
     parser.add_argument(

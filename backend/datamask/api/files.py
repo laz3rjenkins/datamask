@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import secrets
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import IO, Literal
 
@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from datamask.api.errors import ApiError
-from datamask.core.models import Category, Risk
+from datamask.core.models import Categories, Risk
 from datamask.core.pipeline import (
     SheetSuggestions,
     TextFinding,
@@ -46,6 +46,8 @@ class FileEntry:
     path: Path
     adapter: FormatAdapter
     doc: Document
+    # секрет файла: фейки, хеши, сдвиг дат и масштаб в «до/после» и в результате совпадают
+    secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
 
 
 @dataclass
@@ -63,14 +65,8 @@ class FileOut:
     risks: list[Risk]
 
 
-class CategoriesIn(BaseModel):
-    personal: bool = True
-    financial: bool = True
-    commercial: bool = False
-
-
 class SuggestIn(BaseModel):
-    categories: CategoriesIn = CategoriesIn()
+    categories: Categories = Categories()
     header_rows: dict[str, int] = {}  # лист → строка заголовка; нет — определить автоматически
     custom_terms: list[str] = []
 
@@ -194,8 +190,7 @@ def suggest(request: Request, file_id: str, body: SuggestIn) -> SuggestOut:
         raise ApiError(404, "sheet_not_found", "Лист не найден")
     if any(n < 1 for n in body.header_rows.values()):
         raise ApiError(422, "validation_error", "Строка заголовка должна быть не меньше 1")
-    cats = [Category(k) for k, on in body.categories.model_dump().items() if on]
-    detectors = enabled_detectors(cats, body.custom_terms)
+    detectors = enabled_detectors(body.categories.enabled(), body.custom_terms)
     try:
         sheets = [
             suggest_sheet(entry.adapter, entry.doc, s.name, body.header_rows.get(s.name), detectors)

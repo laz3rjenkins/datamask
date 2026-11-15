@@ -7,12 +7,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from datamask.core.models import CellKind, CellRef, CellValue, Risk, TextFragment
+from datamask.core.models import (
+    CellKind,
+    CellRef,
+    CellValue,
+    Risk,
+    SanitizePolicy,
+    TextFragment,
+    UserError,
+)
 
 HEADER_SCAN_ROWS = 50
 
 
-class FormatError(Exception):
+class FormatError(UserError):
     """Файл не читается. Сообщение показывается пользователю: без данных из файла."""
 
 
@@ -20,6 +28,7 @@ class FormatError(Exception):
 class OpenOptions:
     encoding: str | None = None  # CSV: None = определить автоматически
     delimiter: str | None = None
+    writable: bool = False  # для маскирования: XLSX загружается целиком (с форматированием)
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,12 @@ class FormatAdapter(Protocol):
     def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]: ...
     def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]: ...
     def risks(self, doc: Document) -> list[Risk]: ...
+    def column_index(self, key: str) -> int: ...  # ValueError для неверного ключа
+    def set_value(self, doc: Document, ref: CellRef, value: CellValue) -> None: ...
+    def sanitize(
+        self, doc: Document, policy: SanitizePolicy, mask_text: Callable[[str], str]
+    ) -> list[str]: ...
+    def save(self, doc: Document, path: Path) -> None: ...
 
 
 def detect_header_row(rows: Sequence[RawRow]) -> int:

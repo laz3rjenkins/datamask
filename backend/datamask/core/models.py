@@ -5,7 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+
+class UserError(Exception):
+    """Ошибка, текст которой безопасно показать пользователю: без данных из файла."""
+
 
 CellValue = str | int | float | bool | datetime | date | time | None
 CellKind = Literal["empty", "string", "number", "bool", "date", "formula", "error"]
@@ -124,3 +131,47 @@ class TextFragment:
     text: str
     sheet: str | None = None
     ref: str | None = None  # адрес ячейки для примечания
+
+
+# ---- конфигурация маскирования (SPEC §10) ----
+
+
+class Categories(BaseModel):
+    personal: bool = True
+    financial: bool = True
+    commercial: bool = False
+
+    def enabled(self) -> list[Category]:
+        return [Category(k) for k, on in self.model_dump().items() if on]
+
+
+class ColumnConfig(BaseModel):
+    entity: EntityType
+    method: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class SheetConfig(BaseModel):
+    header_row: int = Field(1, ge=1)
+    columns: dict[str, ColumnConfig] = Field(default_factory=dict)  # буква (XLSX) или номер (CSV)
+    scan_above_header: bool = True
+
+
+class SanitizePolicy(BaseModel):
+    metadata: Literal[True] = True  # очищается всегда
+    comments: Literal["remove", "keep"] = (
+        "remove"  # keep — оставить и проверить как свободный текст
+    )
+    hidden_sheets: Literal["keep", "remove"] = "keep"
+    pivot_cache: Literal["remove"] = "remove"
+    images: Literal["keep", "remove"] = "keep"
+
+
+class MaskConfig(BaseModel):
+    categories: Categories = Field(default_factory=Categories)
+    consistency_scope: Literal["file", "project"] = "file"
+    project_id: str | None = None
+    sheets: dict[str, SheetConfig] = Field(default_factory=dict)
+    custom_terms: list[str] = Field(default_factory=list)
+    sanitize: SanitizePolicy = Field(default_factory=SanitizePolicy)
+    save_mapping: bool = True

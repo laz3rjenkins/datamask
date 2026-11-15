@@ -2,14 +2,13 @@
 
 import logging
 import secrets
-import traceback
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import RedirectResponse
 
 from datamask.api.errors import error_response
+from datamask.core.safelog import log_exception
 
 logger = logging.getLogger("datamask.http")
 
@@ -24,13 +23,6 @@ SECURITY_HEADERS = {
 def cookie_name(port: int) -> str:
     # Cookie не разделяются по портам: у каждого запуска своё имя, чтобы не затирать друг друга.
     return f"datamask_{port}"
-
-
-def log_exception(exc: BaseException) -> None:
-    """Тип исключения и место, без сообщения: в нём бывают значения ячеек."""
-    frames = traceback.extract_tb(exc.__traceback__)[-6:]
-    where = " <- ".join(f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in reversed(frames))
-    logger.error("Необработанное исключение %s в %s", type(exc).__name__, where)
 
 
 def install(app: FastAPI, token: str, port: int) -> None:
@@ -63,7 +55,7 @@ def install(app: FastAPI, token: str, port: int) -> None:
         try:
             return await call_next(request)
         except Exception as exc:
-            log_exception(exc)
+            log_exception(logger, exc, "Необработанное исключение")
             return error_response(500, "internal", "Внутренняя ошибка. Подробности в журнале")
 
     @app.middleware("http")

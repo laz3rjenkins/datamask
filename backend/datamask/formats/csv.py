@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import codecs
 import csv
-from collections.abc import Iterator
-from dataclasses import dataclass
+import re
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from charset_normalizer import from_bytes
 
-from datamask.core.models import CellRef, Risk, TextFragment
+from datamask.core.models import CellRef, CellValue, Risk, SanitizePolicy, TextFragment
 from datamask.formats.base import (
     HEADER_SCAN_ROWS,
     Document,
@@ -55,6 +56,13 @@ def detect_delimiter(sample: str) -> str:
         return max(DELIMITERS, key=lambda d: min(line.count(d) for line in lines))
 
 
+def detect_quote_all(sample: str, delimiter: str) -> bool:
+    """Все поля в кавычках (так пишут некоторые выгрузки) — пишем так же."""
+    first = next((line for line in sample.splitlines() if line.strip()), "")
+    d = re.escape(delimiter)
+    return bool(re.fullmatch(rf'"(?:[^"]|"")*"(?:{d}"(?:[^"]|"")*")*', first))
+
+
 def detect_newline(sample: str) -> str:
     for nl in ("\r\n", "\n", "\r"):
         if nl in sample:
@@ -66,7 +74,9 @@ def detect_newline(sample: str) -> str:
 class CsvDocument(Document):
     encoding: str = "utf-8"
     delimiter: str = ","
-    newline: str = "\n"  # понадобится при записи: сохраняем исходные переводы строк
+    newline: str = "\n"  # при записи сохраняем исходные переводы строк
+    quote_all: bool = False
+    changes: dict[int, dict[int, str]] = field(default_factory=dict)  # строка → колонка → значение
 
 
 class CsvAdapter:
@@ -88,7 +98,15 @@ class CsvAdapter:
         if delimiter not in DELIMITERS:
             raise FormatError("Неподдерживаемый разделитель")
         sheet = SheetInfo(SHEET)
-        return CsvDocument(path, [sheet], [], encoding, delimiter, detect_newline(sample))
+        return CsvDocument(
+            path,
+            [sheet],
+            [],
+            encoding,
+            delimiter,
+            detect_newline(sample),
+            detect_quote_all(sample, delimiter),
+        )
 
     def sheets(self, doc: Document) -> list[SheetInfo]:
         return doc.sheets
@@ -98,6 +116,38 @@ class CsvAdapter:
 
     def column_key(self, index: int) -> str:
         return str(index)
+
+    def column_index(self, key: str) -> int:
+        n = int(key)
+        if n < 1:
+            raise ValueError(key)
+        return n
+
+    def set_value(self, doc: Document, ref: CellRef, value: CellValue) -> None:
+        assert isinstance(doc, CsvDocument)
+        doc.changes.setdefault(ref.row, {})[ref.col] = "" if value is None else str(value)
+
+    def sanitize(
+        self, doc: Document, policy: SanitizePolicy, mask_text: Callable[[str], str]
+    ) -> list[str]:
+        return []  # в CSV нет метаданных и скрытых мест
+
+    def save(self, doc: Document, path: Path) -> None:
+        assert isinstance(doc, CsvDocument)
+        try:
+            with path.open("w", encoding=doc.encoding, newline="") as out:
+                w = csv.writer(
+                    out,
+                    delimiter=doc.delimiter,
+                    lineterminator=doc.newline,
+                    quoting=csv.QUOTE_ALL if doc.quote_all else csv.QUOTE_MINIMAL,
+                )
+                for r, row in enumerate(self._rows(doc, SHEET), start=1):
+                    for c, value in doc.changes.get(r, {}).items():
+                        row[c - 1] = value
+                    w.writerow(row)
+        except UnicodeEncodeError as e:
+            raise FormatError("Замаскированное значение не записывается в кодировке файла") from e
 
     def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]:
         return iter(())  # в CSV текст есть только в ячейках

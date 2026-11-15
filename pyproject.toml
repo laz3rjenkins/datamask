@@ -5,10 +5,12 @@ description = "Локальное маскирование персональн�
 requires-python = ">=3.11"
 dependencies = [
     "charset-normalizer>=3.5.2",
+    "cryptography>=50.0.2",
     "defusedxml>=0.7.1",
     "faker>=40.54.0",
     "fastapi",
     "openpyxl>=3.1.5",
+    "pillow>=13.0.0",
     "python-multipart>=0.0.33",
     "pyyaml>=6.0.3",
     "uvicorn",
@@ -26,7 +28,6 @@ dev = [
     "httpx2>=2.16.0",
     "types-openpyxl>=3.1.5.20261017",
     "types-defusedxml>=0.7.0.20260504",
-    "pillow>=13.0.0",
     "types-pyyaml>=6.0.12.20261113",
     "hypothesis>=6.170.15",
 ]
@@ -40,7 +41,7 @@ packages = ["backend/datamask"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
-addopts = "--disable-socket --allow-hosts=127.0.0.1"
+addopts = "--disable-socket --allow-hosts=127.0.0.1 -m \"not slow\""
 markers = ["slow: долгие бенчмарки, не в каждом прогоне"]
 
 [tool.ruff]
@@ -64,5 +65,5 @@ strict = true
 exclude = ["*.md"]
 
 [tool.ruff.lint.per-file-ignores]
-"backend/tests/*" = ["S603", "S311"]
+"backend/tests/*" = ["S603", "S311", "S105", "S106"]  # процессы, random и пароли в тестах
 "scripts/*" = ["S311"]  # детерминированные синтетические данные, не криптография

@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
 
 from datamask.core.models import ENTITY_LABELS, CellValue, EntityType
+from datamask.core.normalize import to_text
 from datamask.detectors.base import DetectContext, Detector, find_spans
 from datamask.detectors.headers import Thresholds, header_hit, thresholds
 
@@ -21,17 +21,6 @@ class Suggestion:
     confidence: float
     method: str
     reasons: list[str] = field(default_factory=list)
-
-
-def to_text(value: CellValue) -> str:
-    """Значение ячейки как строка для распознавателей: даты — ДД.ММ.ГГГГ, 7707.0 — 7707."""
-    if isinstance(value, datetime | date):
-        return value.strftime("%d.%m.%Y")
-    if isinstance(value, time):
-        return value.isoformat()
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return "" if value is None else str(value).strip()
 
 
 def suggest_column(

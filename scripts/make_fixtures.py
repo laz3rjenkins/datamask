@@ -25,6 +25,8 @@ from pathlib import Path
 
 from faker import Faker
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.data_source import AxDataSource, StrData, StrRef, StrVal
 from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image
 from openpyxl.styles import Font, PatternFill
@@ -180,6 +182,17 @@ def write_clients_xlsx(path: Path, people: list[Person], fake: Faker, rnd: rando
         sales.cell(r, 4, amount).number_format = "#,##0.00"
         sales.cell(r, 5, fake.region())
     sales.column_dimensions["B"].width = 34
+    # Диаграмма с кэшем подписей: Excel хранит в ней копию значений колонки «Менеджер».
+    chart = BarChart()
+    chart.add_data(Reference(sales, min_col=4, min_row=1, max_row=61), titles_from_data=True)
+    names = [sales.cell(r, 2).value for r in range(2, 62)]
+    chart.series[0].cat = AxDataSource(
+        strRef=StrRef(
+            f="'Продажи'!$B$2:$B$61",
+            strCache=StrData(ptCount=60, pt=[StrVal(idx=i, v=n) for i, n in enumerate(names)]),
+        )
+    )
+    sales.add_chart(chart, "G2")
 
     archive = wb.create_sheet("Архив")
     archive.sheet_state = "hidden"

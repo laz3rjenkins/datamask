@@ -11,7 +11,7 @@
 
 ## Команды
 
-- Тесты (сеть запрещена через addopts): `uv run pytest`
+- Тесты (сеть запрещена через addopts): `uv run pytest`; бенчмарк A18: `uv run pytest -m slow -s`
 - Линтеры: `uv run ruff check . && uv run ruff format --check . && uv run mypy`
 - Фронт: `cd frontend && npm run build`
 - Фикстуры (синтетические, генерируются и в тестах автоматически): `uv run python scripts/make_fixtures.py`

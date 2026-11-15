@@ -11,16 +11,12 @@ from typing import Literal
 from faker.providers.person.ru_RU import Provider as RuNames
 
 from datamask.core.models import EntityType, Span
+from datamask.core.normalize import digits
 from datamask.detectors import validators as v
 from datamask.detectors.base import DetectContext
 from datamask.detectors.headers import context_keywords
 
 E = EntityType
-_NON_DIGITS = re.compile(r"\D")
-
-
-def digits(s: str) -> str:
-    return _NON_DIGITS.sub("", s)
 
 
 def _on_digits(check: Callable[[str], bool]) -> Callable[[str], bool]:

@@ -9,12 +9,20 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import shutil
 import stat
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Literal
+
+from datamask.core.models import UserError
+from datamask.core.safelog import log_exception
 
 logger = logging.getLogger(__name__)
 
@@ -100,10 +108,46 @@ def cleanup_stale(base: Path) -> int:
     return removed
 
 
+@dataclass
+class Job:
+    id: str
+    folder: Path
+    status: Literal["queued", "running", "done", "error"] = "queued"
+    progress: int = 0
+    artifacts: dict[str, Path] = field(default_factory=dict)  # вид → файл в папке задачи
+    download_names: dict[str, str] = field(default_factory=dict)
+    error: str | None = None
+    summary: dict[str, Any] | None = None
+
+
 class Session:
     def __init__(self, path: Path, lock_fd: int) -> None:
         self.path = path
         self._lock_fd = lock_fd
+        self.jobs: dict[str, Job] = {}
+
+    def start_job(self, work: Callable[[Job], None]) -> Job:
+        """Фоновая задача в отдельном потоке; ход и результат — в объекте Job."""
+        job_id = secrets.token_hex(8)
+        job = Job(job_id, self.path / "jobs" / job_id)
+        job.folder.mkdir(parents=True)
+        self.jobs[job.id] = job
+
+        def run() -> None:
+            job.status = "running"
+            try:
+                work(job)
+            except UserError as e:
+                job.error, job.status = str(e), "error"
+            except Exception as e:
+                log_exception(logger, e, f"Задача {job.id}")
+                job.error, job.status = "Внутренняя ошибка. Подробности в журнале", "error"
+            else:
+                job.progress, job.status = 100, "done"
+            logger.info("Задача %s: %s", job.id, job.status)
+
+        threading.Thread(target=run, daemon=True, name=f"job-{job.id}").start()
+        return job
 
     @classmethod
     def create(cls, base: Path | None = None) -> Session:
@@ -119,6 +163,7 @@ class Session:
 
     def clear(self) -> None:
         """Удаляет все файлы сессии, папка остаётся."""
+        self.jobs.clear()
         for child in self.path.iterdir():
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
