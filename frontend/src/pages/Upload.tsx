@@ -16,7 +16,7 @@ export default function Upload({
 }: {
   meta: Meta
   onUploaded: (info: FileInfo, name: string, project: Project | null) => void
-  onOpenProjects: () => void
+  onOpenProjects?: () => void // нет, пока раздел «Проекты» в разработке
 }) {
   const input = useRef<HTMLInputElement>(null)
   const [projects, setProjects] = useState<Project[]>([])
@@ -59,32 +59,37 @@ export default function Upload({
         </p>
       </div>
 
-      <div className="space-y-2">
-        <label htmlFor="project" className="block text-sm font-semibold">
-          Проект
-        </label>
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            id="project"
-            className={`${selectCls} h-10 min-w-72`}
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-          >
-            <option value="">Без проекта (только этот файл)</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <button type="button" className={`text-sm ${linkCls}`} onClick={onOpenProjects}>
-            {projects.length ? 'Управление проектами' : 'Создать проект'}
-          </button>
+      {/* создать проект негде, пока раздел «Проекты» в разработке: блок — только для уже созданных */}
+      {projects.length > 0 && (
+        <div className="space-y-2">
+          <label htmlFor="project" className="block text-sm font-semibold">
+            Проект
+          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              id="project"
+              className={`${selectCls} h-10 min-w-72`}
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+            >
+              <option value="">Без проекта (только этот файл)</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {onOpenProjects && (
+              <button type="button" className={`text-sm ${linkCls}`} onClick={onOpenProjects}>
+                {projects.length ? 'Управление проектами' : 'Создать проект'}
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate">
+            Проект нужен, чтобы псевдонимы совпадали в разных файлах одного клиента.
+          </p>
         </div>
-        <p className="text-xs text-slate">
-          Проект нужен, чтобы псевдонимы совпадали в разных файлах одного клиента.
-        </p>
-      </div>
+      )}
 
       <div
         onDragOver={(e) => {

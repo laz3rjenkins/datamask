@@ -27,10 +27,11 @@ const STEP_TITLE = {
   result: 'Готово',
 }
 const THEME_ICONS = { system: IconSystem, light: IconSun, dark: IconMoon }
+// soon — раздел в разработке: виден в меню, но не открывается
 const SECTIONS = [
-  { value: 'mask', label: 'Маскирование', icon: IconMask },
-  { value: 'unmask', label: 'Размаскировка', icon: IconUnmask },
-  { value: 'projects', label: 'Проекты', icon: IconProjects },
+  { value: 'mask', label: 'Маскирование', icon: IconMask, soon: false },
+  { value: 'unmask', label: 'Размаскировка', icon: IconUnmask, soon: true },
+  { value: 'projects', label: 'Проекты', icon: IconProjects, soon: true },
 ] as const
 
 export default function App() {
@@ -67,7 +68,6 @@ export default function App() {
       return (
         <Upload
           meta={meta}
-          onOpenProjects={() => setSection('projects')}
           onUploaded={(info, name, project) => {
             setFile({ info, name, project })
             setSettings({ ...initialSettings(), projectId: project?.id ?? null })
@@ -134,23 +134,27 @@ export default function App() {
         </div>
 
         <nav aria-label="Разделы" className="mt-6 flex flex-col">
-          {SECTIONS.map(({ value, label: text, icon: Icon }) => {
+          {SECTIONS.map(({ value, label: text, icon: Icon, soon }) => {
             const active = section === value
             return (
               <button
                 key={value}
                 type="button"
                 aria-current={active ? 'page' : undefined}
-                title={collapsed ? text : undefined}
+                title={collapsed ? (soon ? `${text} — в разработке` : text) : undefined}
+                disabled={soon}
                 onClick={() => setSection(value)}
                 className={`relative flex h-12 items-center gap-3 px-5 text-[0.9375rem] transition-colors duration-150 ${iconOnly} ${
-                  active ? 'bg-row-active font-semibold' : 'hover:bg-pill-hover'
+                  active ? 'bg-row-active font-semibold' : soon ? 'cursor-not-allowed text-slate' : 'hover:bg-pill-hover'
                 }`}
               >
                 {/* черта выбранного раздела у края панели, как на портале */}
                 {active && <span className="absolute inset-y-0 left-0 w-1 bg-accent" aria-hidden />}
                 <Icon />
-                <span className={label}>{text}</span>
+                <span className={`${label} text-left leading-tight`}>
+                  {text}
+                  {soon && <span className="block text-xs">в разработке</span>}
+                </span>
               </button>
             )
           })}
