@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
 from typing import Any
@@ -22,7 +23,9 @@ TEXT_NOTE = (
 )
 
 
-def unmask_file(src: Path, dest: Path, store: MappingStore) -> dict[str, Any]:
+def unmask_file(
+    src: Path, dest: Path, store: MappingStore, progress: Callable[[int], None] = lambda p: None
+) -> dict[str, Any]:
     suffix = PurePath(src.name).suffix.lower()
     if suffix not in UNMASK_EXTENSIONS:
         raise FormatError("Размаскировать можно файлы XLSX, CSV, TXT, MD, HTML и JSON")
@@ -31,7 +34,7 @@ def unmask_file(src: Path, dest: Path, store: MappingStore) -> dict[str, Any]:
         unmask_text_file(src, dest, unmasker)
     else:
         adapter = adapter_for(src.name)
-        run_unmask_table(adapter, adapter.open(src, OpenOptions()), unmasker, dest)
+        run_unmask_table(adapter, adapter.open(src, OpenOptions()), unmasker, dest, progress)
     notes = [TABLE_NOTE]
     if suffix in TEXT_EXTENSIONS and (store.date_shifts or store.scale_factors):
         notes.append(TEXT_NOTE)

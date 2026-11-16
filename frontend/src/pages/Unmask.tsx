@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { Project, UnmaskReport } from '../api/types'
-import { Alert, Button, Spinner, inputCls, selectCls } from '../components/ui'
+import { Alert, Button, ProgressBar, inputCls, selectCls } from '../components/ui'
 import { useJob } from '../lib/useJob'
 
 const ACCEPT = '.xlsx,.csv,.txt,.md,.html,.htm,.json'
@@ -129,7 +129,11 @@ export default function Unmask() {
         <Button variant="primary" disabled={!ready || running} onClick={start}>
           Восстановить
         </Button>
-        {running && <Spinner label="Восстанавливаю…" />}
+        {running && (
+          <div className="w-72">
+            <ProgressBar value={job?.progress ?? 0} label="Восстанавливаю…" />
+          </div>
+        )}
       </div>
 
       {report && job && (

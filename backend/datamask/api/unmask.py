@@ -72,7 +72,7 @@ async def unmask(request: Request) -> dict[str, str]:
             raise MappingError("Неверный пароль или файл таблицы соответствий повреждён") from e
         job.progress = 20
         restored = job.folder / f"restored{suffix}"
-        report = unmask_file(src, restored, store)
+        report = unmask_file(src, restored, store, lambda p: setattr(job, "progress", p))
         job.artifacts["restored"] = restored
         job.download_names["restored"] = out_name
         job.summary = report
