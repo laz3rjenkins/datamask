@@ -27,7 +27,7 @@ from datamask.templates import TemplateRepo
 
 HOST = "127.0.0.1"  # не настраивается: только локальная петля (SPEC §4)
 DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
-DEFAULT_MAX_UPLOAD_MB = 50
+DEFAULT_MAX_UPLOAD_MB = 1024
 OFFLINE_ENV = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "DO_NOT_TRACK": "1"}
 
 
