@@ -62,3 +62,6 @@ cd frontend && npm test && npm run lint                    # тесты и ли�
 - `clients_cp1251.csv` — CSV в Windows-1251 с `;`, коды с ведущими нулями (`007`);
 - `clients_utf8.csv` — CSV в UTF-8 с BOM;
 - `labeled/` — 20 размеченных таблиц для проверки подсказок (A4).
+
+Большая книга для замеров: `uv run python scripts/make_fixtures.py --big 200 big.xlsx`
+(~200 МБ, 40 листов, строки в sharedStrings, как у Excel).

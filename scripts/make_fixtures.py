@@ -8,6 +8,11 @@
   внешняя ссылка, метаданные с именами, именованный диапазон;
 - clients_cp1251.csv (Windows-1251, «;», CRLF) и clients_utf8.csv (UTF-8 с BOM, «,», LF);
 - labeled/ — 20 таблиц с разметкой колонок в labeled/labels.json (для теста автоподсказок A4).
+
+    uv run python scripts/make_fixtures.py --big 200 [файл.xlsx]   # ~200 МБ, 40 листов
+
+Большая книга для замеров (A18 и файлы в сотни МБ) пишется сырым XML потоком, как её
+сохранил бы Excel: строки — в sharedStrings, даты и суммы — числа со стилем.
 """
 
 from __future__ import annotations
@@ -543,6 +548,136 @@ def write_labeled(out: Path, fake: Faker, rnd: random.Random) -> None:
     (out / "labels.json").write_text(json.dumps(labels, ensure_ascii=False, indent=1), "utf-8")
 
 
+# ---------- большая книга ----------
+
+BIG_HEADERS = (
+    "№", "ФИО", "Телефон", "Email", "ИНН", "СНИЛС", "Дата рождения", "Адрес", "Организация",
+    "Сумма", "Дата заказа", "Статус", "Комментарий", "Регион", "Код",
+)  # fmt: skip
+LETTERS = "ABCDEFGHIJKLMNO"
+_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
+_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml."
+_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+
+
+def _xml_text(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _pkg_rels(items: list[tuple[str, str, str]]) -> str:
+    body = "".join(
+        f'<Relationship Id="{i}" Type="{_R}/{kind}" Target="{target}"/>'
+        for i, kind, target in items
+    )
+    return f'{_XML}<Relationships xmlns="{_PKG}">{body}</Relationships>'
+
+
+def _big_styles() -> str:
+    """Стиль 0 — обычный, 1 — дата (numFmtId 14), 2 — сумма «#,##0.00» (numFmtId 4)."""
+    xf = '<xf numFmtId="{}" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    return (
+        f'{_XML}<styleSheet xmlns="{_MAIN}">'
+        '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+        '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill></fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'
+        f'</cellStyleXfs><cellXfs count="3">{xf.format(0)}{xf.format(14)}{xf.format(4)}</cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        "</styleSheet>"
+    )
+
+
+def write_big_xlsx(path: Path, target_mb: float, sheets: int = 40) -> Path:
+    """Книга примерно target_mb МБ: строк на лист подбирается по размеру уже записанных."""
+    fake = Faker("ru_RU")
+    fake.seed_instance(SEED)
+    rnd = random.Random(SEED)
+    people = [person(fake, rnd) for _ in range(20_000)]
+    orgs = [org(fake, rnd) for _ in range(2_000)]
+    regions = [fake.region() for _ in range(80)]
+    comments = [free_text(fake, rnd, rnd.choice(people)) for _ in range(5_000)]
+    statuses = ["Новый", "В работе", "Оплачен", "Отгружен", "Закрыт"]
+    sst: dict[str, int] = {}
+
+    def s(col: str, r: int, text: str) -> str:
+        i = sst.setdefault(text, len(sst))
+        return f'<c r="{col}{r}" t="s"><v>{i}</v></c>'
+
+    def num(col: str, r: int, v: float | int, style: int = 0) -> str:
+        st = f' s="{style}"' if style else ""
+        return f'<c r="{col}{r}"{st}><v>{v}</v></c>'
+
+    epoch = date(1899, 12, 30)
+    target = target_mb * 2**20
+    rows, written = 5_000, 0  # первый лист — для оценки размера строки
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n in range(1, sheets + 1):
+            with z.open(f"xl/worksheets/sheet{n}.xml", "w", force_zip64=True) as f:
+                start = f'{_XML}<worksheet xmlns="{_MAIN}"><dimension ref="A1:O{rows + 1}"/>'
+                f.write((start + "<sheetData>").encode())
+                head = "".join(s(c, 1, h) for c, h in zip(LETTERS, BIG_HEADERS, strict=False))
+                f.write(f'<row r="1">{head}</row>'.encode())
+                buf = []
+                for r in range(2, rows + 2):
+                    p = people[rnd.randrange(len(people))]
+                    order = date(2025, 1, 1) + timedelta(days=rnd.randrange(600))
+                    comment = s("M", r, rnd.choice(comments)) if rnd.random() < 0.4 else ""
+                    buf.append(
+                        f'<row r="{r}">{num("A", r, r - 1)}{s("B", r, p.fio)}{s("C", r, p.phone)}'
+                        f"{s('D', r, p.email)}{s('E', r, p.inn)}{s('F', r, p.snils)}"
+                        f"{num('G', r, (p.birth - epoch).days, 1)}{s('H', r, p.address)}"
+                        f"{s('I', r, rnd.choice(orgs))}"
+                        f"{num('J', r, round(rnd.uniform(100, 500_000), 2), 2)}"
+                        f"{num('K', r, (order - epoch).days, 1)}{s('L', r, rnd.choice(statuses))}"
+                        f"{comment}{s('N', r, rnd.choice(regions))}"
+                        f"{s('O', r, f'K-{rnd.randrange(10_000):04d}')}</row>"
+                    )
+                    if len(buf) == 2_000:
+                        f.write("".join(buf).encode())
+                        buf = []
+                f.write(("".join(buf) + "</sheetData></worksheet>").encode())
+            written += z.getinfo(f"xl/worksheets/sheet{n}.xml").compress_size
+            left = sheets - n
+            if left:
+                rows = max(int((target - written) / left / (written / (rows * n or 1))), 100)
+        si = "".join(f'<si><t xml:space="preserve">{_xml_text(t)}</t></si>' for t in sst)
+        z.writestr(
+            "xl/sharedStrings.xml",
+            f'{_XML}<sst xmlns="{_MAIN}" uniqueCount="{len(sst)}">{si}</sst>',
+        )
+        z.writestr("xl/styles.xml", _big_styles())
+        names = range(1, sheets + 1)
+        tags = "".join(f'<sheet name="Выгрузка {n}" sheetId="{n}" r:id="rId{n}"/>' for n in names)
+        z.writestr(
+            "xl/workbook.xml",
+            f'{_XML}<workbook xmlns="{_MAIN}" xmlns:r="{_R}"><sheets>{tags}</sheets></workbook>',
+        )
+        rels = [(f"rId{n}", "worksheet", f"worksheets/sheet{n}.xml") for n in names]
+        rels += [("rIdS", "styles", "styles.xml"), ("rIdT", "sharedStrings", "sharedStrings.xml")]
+        z.writestr("xl/_rels/workbook.xml.rels", _pkg_rels(rels))
+        z.writestr("_rels/.rels", _pkg_rels([("rId1", "officeDocument", "xl/workbook.xml")]))
+        parts = [(f"/xl/worksheets/sheet{n}.xml", "worksheet") for n in names]
+        parts += [
+            ("/xl/workbook.xml", "sheet.main"),
+            ("/xl/styles.xml", "styles"),
+            ("/xl/sharedStrings.xml", "sharedStrings"),
+        ]
+        overrides = "".join(
+            f'<Override PartName="{name}" ContentType="{_CT}{kind}+xml"/>' for name, kind in parts
+        )
+        z.writestr(
+            "[Content_Types].xml",
+            f'{_XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" '
+            'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            f'<Default Extension="xml" ContentType="application/xml"/>{overrides}</Types>',
+        )
+    return path
+
+
 def generate(out: Path = DEFAULT_OUT) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     fake = Faker("ru_RU")
@@ -557,4 +692,9 @@ def generate(out: Path = DEFAULT_OUT) -> Path:
 
 
 if __name__ == "__main__":
-    print(generate(Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUT))
+    if sys.argv[1:2] == ["--big"]:
+        dest = Path(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_OUT / "big.xlsx"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        print(write_big_xlsx(dest, float(sys.argv[2])))
+    else:
+        print(generate(Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUT))
