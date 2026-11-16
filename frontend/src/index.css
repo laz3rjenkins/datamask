@@ -60,7 +60,7 @@
       --color-disabled: #5d636d;
       --color-navy: #a9bbf0;
       --color-primary: #4f68ad;
-      --color-primary-hover: #5b75bb;
+      --color-primary-hover: #5871b7; /* белый текст ≥4.5:1 */
       --color-accent: #7d97d6;
       --color-link: #8fa8e6;
       --color-danger: #f08a80;

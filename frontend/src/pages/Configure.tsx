@@ -209,7 +209,7 @@ export default function Configure({
                 label: (
                   <>
                     {s.name}
-                    {s.hidden && <span className="ml-1.5 text-xs opacity-70">скрытый</span>}
+                    {s.hidden && <span className="ml-1.5 text-xs text-slate">скрытый</span>}
                   </>
                 ),
               }))}

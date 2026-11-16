@@ -65,7 +65,7 @@ export default function PreviewTable({
                   scope="col"
                   className={`sticky top-0 z-10 w-56 max-w-72 min-w-48 border-b border-l border-line px-2 py-2 align-top ${
                     selected ? 'bg-band' : 'bg-panel max-sm:w-40 max-sm:min-w-40'
-                  } ${c.hidden ? 'opacity-60' : ''}`}
+                  } ${c.hidden ? 'text-slate' : ''}`}
                 >
                   <ColumnHeader
                     meta={meta}
@@ -112,7 +112,7 @@ export default function PreviewTable({
                       key={c.key}
                       className={`max-w-72 border-b border-l border-line px-2 py-1.5 align-top ${
                         cfg && !r.above ? 'bg-band' : ''
-                      } ${c.hidden ? 'opacity-50' : ''} ${r.kinds[c.index - 1] === 'number' ? 'text-right tabular-nums' : ''}`}
+                      } ${c.hidden ? 'text-slate' : ''} ${r.kinds[c.index - 1] === 'number' ? 'text-right tabular-nums' : ''}`}
                     >
                       <div
                         className={`${free || found ? 'line-clamp-2 whitespace-normal' : 'truncate'} ${cfg ? '' : 'max-sm:max-w-36'}`}
