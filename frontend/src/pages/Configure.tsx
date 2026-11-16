@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, errorText } from '../api/client'
 import type { CellSpans, FileInfo, MaskConfig, Meta, Preview, SuggestResult, Template } from '../api/types'
 import PreviewTable from '../components/PreviewTable'
 import Sidebar from '../components/Sidebar'
-import { Alert, Button, Spinner, Tabs, selectCls } from '../components/ui'
+import { IconBack, IconNext } from '../components/icons'
+import { Alert, Button, Spinner, Tabs, linkCls, selectCls } from '../components/ui'
 import {
   applySuggestions,
   applyTemplate,
@@ -34,6 +36,7 @@ export default function Configure({
   file,
   settings,
   setSettings,
+  actions,
   onFile,
   onBack,
   onNext,
@@ -42,6 +45,7 @@ export default function Configure({
   file: FileInfo
   settings: Settings
   setSettings: (f: (s: Settings) => Settings) => void
+  actions: HTMLElement | null // место в строке заголовка страницы
   onFile: (f: FileInfo) => void
   onBack: () => void
   onNext: (config: MaskConfig) => void
@@ -55,6 +59,8 @@ export default function Configure({
   const [templates, setTemplates] = useState<Template[]>([])
   const [templateName, setTemplateName] = useState<string | null>(null) // null — форма закрыта
   const [notice, setNotice] = useState<string | null>(null)
+  // Предупреждения раскрыты на широком экране; на узком свёрнуты в строку, чтобы таблица была видна.
+  const [warningsOpen] = useState(() => window.matchMedia('(min-width: 48rem)').matches)
 
   useEffect(() => {
     api.templates().then(setTemplates, () => setTemplates([]))
@@ -146,44 +152,14 @@ export default function Configure({
   const count = selectedCount(settings.columns)
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
-      <div className="min-w-0 space-y-4">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          {file.sheets.length > 1 && (
-            <Tabs
-              label="Листы"
-              value={sheet}
-              onChange={setSheet}
-              items={file.sheets.map((s) => ({
-                value: s.name,
-                label: (
-                  <>
-                    {s.name}
-                    {s.hidden && <span className="ml-1.5 text-xs opacity-70">скрытый</span>}
-                  </>
-                ),
-              }))}
-            />
-          )}
-          {preview && (
-            <HeaderRowControl
-              key={`${sheet}-${preview.header_row}`}
-              value={preview.header_row}
-              detected={preview.detected_header_row}
-              manual={userHeader !== undefined}
-              onChange={(n) => {
-                const rows = { ...settings.headerRows }
-                if (n === undefined) delete rows[sheet]
-                else rows[sheet] = n
-                patch({ headerRows: rows })
-              }}
-            />
-          )}
-          <div className="ml-auto flex flex-wrap gap-2">
+    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      {actions &&
+        createPortal(
+          <>
             {templates.length > 0 && (
               <select
                 aria-label="Применить шаблон"
-                className={`${selectCls} py-2`}
+                className={`${selectCls} h-9`}
                 value=""
                 disabled={!suggestions}
                 onChange={(e) => {
@@ -218,7 +194,46 @@ export default function Configure({
             <Button disabled={!count} onClick={() => patch({ columns: {} })}>
               Сбросить
             </Button>
-          </div>
+          </>,
+          actions,
+        )}
+      <div className="min-w-0 space-y-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          {file.sheets.length > 1 && (
+            <Tabs
+              label="Листы"
+              value={sheet}
+              onChange={setSheet}
+              items={file.sheets.map((s) => ({
+                value: s.name,
+                label: (
+                  <>
+                    {s.name}
+                    {s.hidden && <span className="ml-1.5 text-xs opacity-70">скрытый</span>}
+                  </>
+                ),
+              }))}
+            />
+          )}
+          {preview && (
+            <HeaderRowControl
+              key={`${sheet}-${preview.header_row}`}
+              value={preview.header_row}
+              detected={preview.detected_header_row}
+              manual={userHeader !== undefined}
+              onChange={(n) => {
+                const rows = { ...settings.headerRows }
+                if (n === undefined) delete rows[sheet]
+                else rows[sheet] = n
+                patch({ headerRows: rows })
+              }}
+            />
+          )}
+          {(busy.suggest || busy.preview) && (
+            <span className="ml-auto">
+              <Spinner label={busy.preview ? 'Читаю лист…' : 'Ищу персональные данные в колонках…'} />
+            </span>
+          )}
         </div>
 
         {file.csv && (
@@ -253,7 +268,7 @@ export default function Configure({
                 ))}
               </select>
             </label>
-            <span className="text-xs text-neutral-500">
+            <span className="text-xs text-slate">
               Определены автоматически. Если текст в таблице нечитаемый, поменяйте кодировку.
             </span>
           </div>
@@ -295,13 +310,13 @@ export default function Configure({
             <Button variant="ghost" onClick={() => setTemplateName(null)}>
               Отмена
             </Button>
-            <span className="text-xs text-neutral-500">
+            <span className="text-xs text-slate">
               В шаблон попадут только заголовки колонок и выбранные способы, без данных.
             </span>
           </form>
         )}
         {notice && (
-          <p className="text-sm text-neutral-600 dark:text-neutral-400" role="status">
+          <p className="text-sm text-slate" role="status">
             {notice}
           </p>
         )}
@@ -309,8 +324,11 @@ export default function Configure({
         {error && <Alert tone="error">{error}</Alert>}
 
         {(file.risks.length > 0 || findings.length > 0 || !!sheetSugg?.above_header.length) && (
-          <Alert tone="warn" title="Обратите внимание">
-            <ul className="list-disc space-y-0.5 pl-5">
+          <details open={warningsOpen} className="rounded-lg bg-warn-bg px-4 py-3 text-sm">
+            <summary className="cursor-pointer font-semibold text-warn">
+              Обратите внимание ({file.risks.length + findings.length + (sheetSugg?.above_header.length ? 1 : 0)})
+            </summary>
+            <ul className="mt-1 list-disc space-y-0.5 pl-5">
               {file.risks.map((r, i) => (
                 <li key={i}>{r.message}</li>
               ))}
@@ -325,13 +343,8 @@ export default function Configure({
                 </li>
               )}
             </ul>
-          </Alert>
+          </details>
         )}
-
-        <div className="flex h-5 items-center gap-4">
-          {busy.suggest && <Spinner label="Ищу персональные данные в колонках…" />}
-          {busy.preview && <Spinner label="Читаю лист…" />}
-        </div>
 
         {preview && preview.sheet === sheet && (
           <PreviewTable
@@ -349,17 +362,18 @@ export default function Configure({
           />
         )}
         {preview && preview.rows.length >= 200 && (
-          <p className="text-xs text-neutral-500">
+          <p className="text-xs text-slate">
             Показаны первые 200 строк. Маскируется весь файл.
           </p>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
           <Button variant="ghost" onClick={onBack}>
-            ← Другой файл
+            <IconBack size={16} />
+            Другой файл
           </Button>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-neutral-500">
+            <span className="text-sm text-slate">
               {count ? `Выбрано колонок: ${count}` : 'Колонки не выбраны'}
             </span>
             <Button
@@ -367,7 +381,8 @@ export default function Configure({
               disabled={!suggestions || busy.suggest}
               onClick={() => suggestions && onNext(buildConfig(settings, suggestions))}
             >
-              Далее: проверка →
+              Далее: проверка
+              <IconNext size={16} />
             </Button>
           </div>
         </div>
@@ -426,11 +441,11 @@ function HeaderRowControl({
         onKeyDown={(e) => e.key === 'Enter' && commit()}
       />
       {manual ? (
-        <button type="button" className="text-xs underline" onClick={() => onChange(undefined)}>
+        <button type="button" className={`text-xs ${linkCls}`} onClick={() => onChange(undefined)}>
           авто ({detected})
         </button>
       ) : (
-        <span className="text-xs text-neutral-500">определена автоматически</span>
+        <span className="text-xs text-slate">определена автоматически</span>
       )}
     </div>
   )

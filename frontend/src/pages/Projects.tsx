@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { Meta, Project, Template } from '../api/types'
-import { Alert, Button, inputCls } from '../components/ui'
+import { Alert, Button, PageHeader, inputCls } from '../components/ui'
 
 const date = (iso: string) =>
   new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -82,11 +82,11 @@ export default function Projects({ meta }: { meta: Meta }) {
     )
 
   return (
-    <div className="mx-auto max-w-3xl space-y-10 py-6">
+    <div className="max-w-3xl space-y-10">
       <section className="space-y-4">
         <div>
-          <h1 className="text-2xl font-semibold">Проекты</h1>
-          <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+          <PageHeader title="Проекты" />
+          <p className="mt-3 text-base text-slate">
             Проект — общая таблица соответствий для нескольких файлов одного клиента: один и тот же
             человек получает один псевдоним во всех выгрузках. Хранится на этом компьютере в
             зашифрованном виде.
@@ -96,14 +96,14 @@ export default function Projects({ meta }: { meta: Meta }) {
         {error && <Alert tone="error">{error}</Alert>}
 
         {projects === null ? null : projects.length === 0 ? (
-          <p className="text-sm text-neutral-500">Проектов пока нет.</p>
+          <p className="text-sm text-slate">Проектов пока нет.</p>
         ) : (
-          <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+          <ul className="divide-y divide-line rounded-lg border border-line">
             {projects.map((p) => (
               <li key={p.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div>
                   <p className="font-medium">{p.name}</p>
-                  <p className="text-sm text-neutral-500">
+                  <p className="text-sm text-slate">
                     создан {date(p.created_at)} · изменён {date(p.updated_at)} · записей: {p.entries}
                   </p>
                 </div>
@@ -114,12 +114,12 @@ export default function Projects({ meta }: { meta: Meta }) {
         )}
       </section>
 
-      <form onSubmit={create} className="space-y-3 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+      <form onSubmit={create} className="space-y-3 rounded-lg bg-ground p-5">
         <h2 className="font-semibold">Новый проект</h2>
         <label className="block text-sm">
           Название
           <input className={`${inputCls} mt-1`} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
-          <span className="mt-1 block text-xs text-neutral-500">
+          <span className="mt-1 block text-xs text-slate">
             Название хранится открыто, чтобы показать список без пароля. Не пишите в нём персональные данные.
           </span>
         </label>
@@ -145,30 +145,30 @@ export default function Projects({ meta }: { meta: Meta }) {
             />
           </label>
         </div>
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-slate">
           Пароль нигде не сохраняется. Без него нельзя ни дополнить проект, ни восстановить данные.
         </p>
-        {problem && (name || password || repeat) && <p className="text-sm text-red-700 dark:text-red-300">{problem}</p>}
+        {problem && (name || password || repeat) && <p className="text-sm text-danger">{problem}</p>}
         <Button type="submit" variant="primary" disabled={!!problem || busy}>
           Создать проект
         </Button>
       </form>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Шаблоны настроек</h2>
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+        <h2 className="text-lg leading-snug font-semibold">Шаблоны настроек</h2>
+        <p className="text-sm text-slate">
           Правила «заголовок колонки → тип и способ». Сохраняются на экране настройки и
           применяются к файлам той же структуры.
         </p>
         {templates.length === 0 ? (
-          <p className="text-sm text-neutral-500">Шаблонов пока нет.</p>
+          <p className="text-sm text-slate">Шаблонов пока нет.</p>
         ) : (
-          <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+          <ul className="divide-y divide-line rounded-lg border border-line">
             {templates.map((t) => (
               <li key={t.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div>
                   <p className="font-medium">{t.name}</p>
-                  <p className="text-sm text-neutral-500">
+                  <p className="text-sm text-slate">
                     {t.rules.map((r) => r.header).join(', ')}
                   </p>
                 </div>

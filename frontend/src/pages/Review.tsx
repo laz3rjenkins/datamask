@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { DryRun, FileInfo, Job, JobSummary, MaskConfig, Meta, SummaryResult } from '../api/types'
-import { Alert, Button, Irreversible, ProgressBar, Spinner, Tabs, inputCls } from '../components/ui'
+import { IconBack } from '../components/icons'
+import { Alert, Button, Irreversible, ProgressBar, SectionTitle, Spinner, Tabs, inputCls } from '../components/ui'
 import { formatCell } from '../lib/format'
 import { useJob } from '../lib/useJob'
 
@@ -100,11 +101,14 @@ export default function Review({
 
   if (error) {
     return (
-      <div className="mx-auto max-w-2xl space-y-4 py-10">
+      <div className="max-w-2xl space-y-4">
         <Alert tone="error" title="Настройки не подходят">
           {error}
         </Alert>
-        <Button onClick={onBack}>← Вернуться к настройке</Button>
+        <Button onClick={onBack}>
+          <IconBack size={16} />
+          Вернуться к настройке
+        </Button>
       </div>
     )
   }
@@ -114,10 +118,10 @@ export default function Review({
   const warnings = dry.warnings.filter((w) => w !== meta.free_text_warning)
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-xl font-semibold">Проверьте результат</h1>
+          <SectionTitle>До и после</SectionTitle>
           <Tabs
             label="Вид"
             value={view}
@@ -133,24 +137,24 @@ export default function Review({
           <Tabs label="Листы" value={sheet} onChange={setSheet} items={dry.sheets.map((s) => ({ value: s.sheet, label: s.sheet }))} />
         )}
         {current && (
-          <div className="max-h-[28rem] overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
+          <div className="max-h-[28rem] overflow-auto rounded-lg border border-line">
             <table className="w-max border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
-                  <th className="sticky top-0 left-0 z-20 border-b border-neutral-200 bg-neutral-50 px-2 py-2 text-xs font-normal text-neutral-400 dark:border-neutral-800 dark:bg-neutral-900">
+                  <th className="sticky top-0 left-0 z-20 border-b border-line bg-panel px-2 py-2 text-xs font-normal text-slate">
                     стр.
                   </th>
                   {current.columns.map((c) => (
                     <th
                       key={c.key}
-                      className={`sticky top-0 z-10 max-w-64 min-w-32 border-b border-l border-neutral-200 px-2 py-2 text-left align-top dark:border-neutral-800 ${
-                        c.entity ? 'bg-amber-50 dark:bg-amber-900/30' : 'bg-neutral-50 dark:bg-neutral-900'
+                      className={`sticky top-0 z-10 max-w-64 min-w-32 border-b border-l border-line px-2 py-2 text-left align-top ${
+                        c.entity ? 'bg-band' : 'bg-panel'
                       }`}
                     >
-                      <span className="text-xs font-normal text-neutral-400">{c.key} </span>
+                      <span className="text-xs font-normal text-slate">{c.key} </span>
                       <span className="font-medium">{c.header}</span>
                       {c.entity && c.method && (
-                        <span className="block text-xs font-normal text-neutral-500">
+                        <span className="block text-xs font-normal text-slate">
                           {label(c.entity)} · {method(c.method)?.label}
                         </span>
                       )}
@@ -160,15 +164,15 @@ export default function Review({
               </thead>
               <tbody>
                 {current.rows.map((r) => (
-                  <tr key={r.row} className={r.row < current.header_row ? 'text-neutral-500' : ''}>
-                    <td className="sticky left-0 border-b border-neutral-100 bg-white px-2 py-1.5 text-right text-xs text-neutral-400 tabular-nums dark:border-neutral-800/60 dark:bg-neutral-950">
+                  <tr key={r.row} className={r.row < current.header_row ? 'text-slate' : ''}>
+                    <td className="sticky left-0 border-b border-line bg-panel px-2 py-1.5 text-right text-xs text-slate tabular-nums">
                       {r.row}
                     </td>
                     {(view === 'after' ? r.after : r.before).map((v, i) => (
                       <td
                         key={i}
-                        className={`max-w-64 truncate border-b border-l border-neutral-100 px-2 py-1.5 dark:border-neutral-800/60 ${
-                          r.changed[i] ? 'bg-emerald-50 dark:bg-emerald-950/50' : ''
+                        className={`max-w-64 truncate border-b border-l border-line px-2 py-1.5 ${
+                          r.changed[i] ? 'bg-band' : ''
                         }`}
                         title={formatCell(v)}
                       >
@@ -181,14 +185,14 @@ export default function Review({
             </table>
           </div>
         )}
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-slate">
           Первые 50 строк. Изменённые ячейки подсвечены зелёным. Псевдонимы здесь — пример: в
           итоговом файле нумерация считается по всему файлу.
         </p>
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Что будет заменено</h2>
+        <h2 className="text-lg leading-snug font-semibold">Что будет заменено</h2>
         {!selected ? (
           <Alert tone="warn">
             Ни одна колонка не выбрана. Замаскированы будут только находки в шапке над таблицей и
@@ -199,15 +203,15 @@ export default function Review({
         ) : !summary ? (
           <div className="max-w-md">
             <ProgressBar value={summaryJob?.progress ?? 0} label="Считаю значения по всему файлу…" />
-            <p className="mt-2 text-xs text-neutral-500">
+            <p className="mt-2 text-xs text-slate">
               Можно не ждать: маскирование запускается и без этой таблицы.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-neutral-500">
-                <tr className="border-b border-neutral-200 dark:border-neutral-800">
+              <thead className="text-left text-slate">
+                <tr className="border-b border-line">
                   <th className="py-2 pr-4 font-normal">Лист</th>
                   <th className="py-2 pr-4 font-normal">Колонка</th>
                   <th className="py-2 pr-4 font-normal">Тип</th>
@@ -219,10 +223,10 @@ export default function Review({
               </thead>
               <tbody>
                 {summary.map((c) => (
-                  <tr key={`${c.sheet}!${c.key}`} className="border-b border-neutral-100 dark:border-neutral-800/60">
+                  <tr key={`${c.sheet}!${c.key}`} className="border-b border-line">
                     <td className="py-2 pr-4">{c.sheet}</td>
                     <td className="py-2 pr-4">
-                      <span className="text-neutral-400">{c.key}</span> {c.header}
+                      <span className="text-slate">{c.key}</span> {c.header}
                     </td>
                     <td className="py-2 pr-4">{label(c.entity)}</td>
                     <td className="py-2 pr-4">
@@ -251,12 +255,12 @@ export default function Review({
         )}
       </section>
 
-      <section className="grid gap-6 md:grid-cols-2">
+      <section className="grid gap-8 rounded-lg bg-ground p-5 md:grid-cols-2">
         <div className="space-y-3">
-          <h2 className="text-lg font-semibold">Таблица соответствий</h2>
+          <h2 className="text-lg leading-snug font-semibold">Таблица соответствий</h2>
           {project ? (
             <>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              <p className="text-sm text-slate">
                 Новые значения добавятся в проект «{projectName}», уже известные получат прежние
                 псевдонимы. В предпросмотре выше нумерация примерная.
               </p>
@@ -273,7 +277,7 @@ export default function Review({
             </>
           ) : (
             <>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              <p className="text-sm text-slate">
                 Нужна, чтобы потом вернуть настоящие значения. Хранится только в зашифрованном
                 виде; пароль нигде не сохраняется — без него восстановить данные нельзя.
               </p>
@@ -300,12 +304,12 @@ export default function Review({
                 />
               </label>
               {passwordProblem && (password || repeat) && (
-                <p className="text-sm text-red-700 dark:text-red-300">{passwordProblem}</p>
+                <p className="text-sm text-danger">{passwordProblem}</p>
               )}
               <label className="flex gap-2 text-sm">
                 <input
                   type="checkbox"
-                  className="mt-0.5 size-4 accent-neutral-900 dark:accent-neutral-100"
+                  className="mt-0.5 size-4"
                   checked={noMapping}
                   onChange={(e) => setNoMapping(e.target.checked)}
                 />
@@ -316,7 +320,7 @@ export default function Review({
         </div>
 
         <div className="space-y-3">
-          <h2 className="text-lg font-semibold">Имя результата</h2>
+          <h2 className="text-lg leading-snug font-semibold">Имя результата</h2>
           <label className="block text-sm">
             <span className="sr-only">Имя замаскированного файла</span>
             <input className={inputCls} value={outName} onChange={(e) => setOutName(e.target.value)} />
@@ -332,9 +336,10 @@ export default function Review({
 
       {shownError && <Alert tone="error">{shownError}</Alert>}
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
         <Button variant="ghost" onClick={onBack} disabled={!!running}>
-          ← Назад к настройке
+          <IconBack size={16} />
+          Назад к настройке
         </Button>
         {running ? (
           <div className="w-72">

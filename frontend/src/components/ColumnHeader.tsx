@@ -1,5 +1,6 @@
 import type { CellKind, Column, ColumnConfig, ColumnSuggestion, Meta, Params } from '../api/types'
 import { changeEntity, changesType } from '../lib/settings'
+import { IconCheck } from './icons'
 import { Irreversible, selectCls } from './ui'
 
 const CATEGORY_LABELS = { personal: 'Персональные', financial: 'Финансовые', commercial: 'Коммерческие' }
@@ -38,11 +39,11 @@ export default function ColumnHeader({
   return (
     <div className="flex flex-col gap-1.5 text-left font-normal">
       <div className="flex items-baseline gap-1.5">
-        <span className="text-xs text-neutral-400">{column.key}</span>
-        <span className="truncate font-medium" title={column.header}>
-          {column.header || <span className="text-neutral-400 italic">без заголовка</span>}
+        <span className="text-xs text-slate">{column.key}</span>
+        <span className="truncate font-semibold" title={column.header}>
+          {column.header || <span className="text-slate italic">без заголовка</span>}
         </span>
-        {column.hidden && <span className="text-xs text-neutral-500">(скрытая)</span>}
+        {column.hidden && <span className="text-xs text-slate">(скрытая)</span>}
       </div>
 
       {s && (
@@ -51,13 +52,11 @@ export default function ColumnHeader({
           onClick={() => onChange({ entity: s.entity, method: s.method })}
           title={suggestionText(meta, s)}
           aria-label={`Подсказка: ${suggestionText(meta, s)}${applied ? '' : '. Нажмите, чтобы применить'}`}
-          className={`self-start rounded-full px-2 py-0.5 text-xs ${
-            applied
-              ? 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300'
-              : 'bg-sky-100 text-sky-900 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-100'
+          className={`inline-flex items-center gap-1 self-start rounded-md px-2 py-0.5 text-xs transition-colors duration-150 ${
+            applied ? 'text-slate' : 'bg-chip font-medium text-ink hover:bg-pill-hover'
           }`}
         >
-          {applied ? '✓ ' : 'Похоже: '}
+          {applied ? <IconCheck size={14} /> : 'Похоже: '}
           {meta.entities.find((e) => e.value === s.entity)?.label} · {Math.round(s.confidence * 100)}%
         </button>
       )}
@@ -100,7 +99,7 @@ export default function ColumnHeader({
               return (
                 <option key={m} value={m}>
                   {mm?.label}
-                  {mm && !mm.reversible ? ' ⚠' : ''}
+                  {mm && !mm.reversible ? ' (необратимо)' : ''}
                 </option>
               )
             })}
@@ -108,10 +107,10 @@ export default function ColumnHeader({
           <ParamControl config={config} id={id} onChange={(params) => onChange({ ...config, params })} />
           {method && !method.reversible && <Irreversible />}
           {config.entity !== 'FREE_TEXT' && changesType(kinds, config.method) && (
-            <span className="text-xs text-amber-700 dark:text-amber-300">Тип колонки изменится на текст</span>
+            <span className="text-xs text-warn">Тип колонки изменится на текст</span>
           )}
           {!!suggestion?.formulas && (
-            <span className="text-xs text-amber-700 dark:text-amber-300">
+            <span className="text-xs text-warn">
               Формул: {suggestion.formulas} — будут пропущены
             </span>
           )}
@@ -131,7 +130,7 @@ function ParamControl({
   onChange: (p: Params) => void
 }) {
   const p = config.params ?? {}
-  const small = 'flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400'
+  const small = 'flex items-center gap-1.5 text-xs text-slate'
   switch (config.method) {
     case 'pseudonym':
       if (config.entity === 'FREE_TEXT') return null

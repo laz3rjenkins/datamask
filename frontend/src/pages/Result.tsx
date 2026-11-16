@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { Job, Meta } from '../api/types'
-import { Alert, Button } from '../components/ui'
+import { IconDownload } from '../components/icons'
+import { Alert, Button, ButtonLink } from '../components/ui'
 
 const DOWNLOADS: { kind: string; title: string; note: string }[] = [
   { kind: 'masked', title: 'Замаскированный файл', note: 'Его можно отдавать дальше' },
@@ -39,41 +40,35 @@ export default function Result({
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 py-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Готово</h1>
-        <p className="mt-1 text-neutral-600 dark:text-neutral-400">{outputName}</p>
-      </div>
+    <div className="max-w-3xl space-y-8">
+      <p className="text-base break-all text-slate">{outputName}</p>
 
       <Alert tone="warn">{meta.free_text_warning}</Alert>
 
-      <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+      <ul className="divide-y divide-line rounded-lg border border-line">
         {DOWNLOADS.filter((d) => job.artifacts.includes(d.kind)).map((d) => (
           <li key={d.kind} className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
               <p className="font-medium">{d.title}</p>
-              <p className="text-sm text-neutral-500">{d.note}</p>
+              <p className="text-sm text-slate">{d.note}</p>
             </div>
-            <a
-              href={api.downloadUrl(job.job_id, d.kind)}
-              download
-              className="rounded-md border border-neutral-300 px-3.5 py-2 text-sm font-medium hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            >
+            <ButtonLink href={api.downloadUrl(job.job_id, d.kind)} download className="shrink-0">
+              <IconDownload size={16} />
               Скачать
-            </a>
+            </ButtonLink>
           </li>
         ))}
       </ul>
       {!job.artifacts.includes('mapping') && (
-        <p className="text-sm text-neutral-500">Таблица соответствий не сохранялась: размаскировка невозможна.</p>
+        <p className="text-sm text-slate">Таблица соответствий не сохранялась: размаскировка невозможна.</p>
       )}
 
       {s && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Сводка</h2>
+          <h2 className="text-lg leading-snug font-semibold">Сводка</h2>
           <table className="w-full text-sm">
-            <thead className="text-left text-neutral-500">
-              <tr className="border-b border-neutral-200 dark:border-neutral-800">
+            <thead className="text-left text-slate">
+              <tr className="border-b border-line">
                 <th className="py-2 pr-4 font-normal">Тип</th>
                 <th className="py-2 pr-4 text-right font-normal">Заменено</th>
                 <th className="py-2 text-right font-normal">Уникальных</th>
@@ -81,7 +76,7 @@ export default function Result({
             </thead>
             <tbody>
               {Object.entries(s.by_entity).map(([e, n]) => (
-                <tr key={e} className="border-b border-neutral-100 dark:border-neutral-800/60">
+                <tr key={e} className="border-b border-line">
                   <td className="py-2 pr-4">{label(e)}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">{n.replaced}</td>
                   <td className="py-2 text-right tabular-nums">{e === 'FREE_TEXT' ? '—' : n.unique}</td>
@@ -109,7 +104,7 @@ export default function Result({
 
       {error && <Alert tone="error">{error}</Alert>}
 
-      <div className="flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+      <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
         <Button variant="primary" onClick={onAnother}>
           Маскировать ещё файл
         </Button>

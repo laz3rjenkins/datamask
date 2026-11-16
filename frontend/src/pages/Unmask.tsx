@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { Project, UnmaskReport } from '../api/types'
-import { Alert, Button, ProgressBar, inputCls, selectCls } from '../components/ui'
+import { IconDownload } from '../components/icons'
+import { Alert, Button, ButtonLink, PageHeader, ProgressBar, fileCls, inputCls, selectCls } from '../components/ui'
 import { useJob } from '../lib/useJob'
 
 const ACCEPT = '.xlsx,.csv,.txt,.md,.html,.htm,.json'
@@ -44,10 +45,10 @@ export default function Unmask() {
   const error = startError ?? jobError
 
   return (
-    <div className="mx-auto max-w-2xl space-y-8 py-6">
+    <div className="max-w-2xl space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold">Размаскировка</h1>
-        <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+        <PageHeader title="Размаскировка" />
+        <p className="mt-3 text-base text-slate">
           Верните настоящие значения в файл, сделанный по замаскированным данным: например, в
           дашборд от облачной модели. Всё происходит на этом компьютере.
         </p>
@@ -61,13 +62,13 @@ export default function Unmask() {
           id="unmask-file"
           type="file"
           accept={ACCEPT}
-          className="block text-sm file:mr-3 file:rounded-md file:border file:border-neutral-300 file:bg-white file:px-3 file:py-1.5 file:text-sm dark:file:border-neutral-700 dark:file:bg-neutral-900 dark:file:text-neutral-100"
+          className={fileCls}
           onChange={(e) => {
             setFile(e.target.files?.[0] ?? null)
             setJobId(null)
           }}
         />
-        <p className="text-xs text-neutral-500">XLSX, CSV, TXT, MD, HTML или JSON</p>
+        <p className="text-xs text-slate">XLSX, CSV, TXT, MD, HTML или JSON</p>
       </section>
 
       <section className="space-y-3">
@@ -93,13 +94,13 @@ export default function Unmask() {
             type="file"
             accept=".dmmap"
             aria-label="Таблица соответствий"
-            className="block text-sm file:mr-3 file:rounded-md file:border file:border-neutral-300 file:bg-white file:px-3 file:py-1.5 file:text-sm dark:file:border-neutral-700 dark:file:bg-neutral-900 dark:file:text-neutral-100"
+            className={fileCls}
             onChange={(e) => setMapping(e.target.files?.[0] ?? null)}
           />
         ) : (
           <select
             aria-label="Проект"
-            className={`${selectCls} py-2`}
+            className={`${selectCls} h-10 min-w-72`}
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
           >
@@ -137,8 +138,8 @@ export default function Unmask() {
       </div>
 
       {report && job && (
-        <section className="space-y-4 border-t border-neutral-200 pt-6 dark:border-neutral-800">
-          <h2 className="text-lg font-semibold">Готово</h2>
+        <section className="space-y-4 border-t border-line pt-6">
+          <h2 className="text-lg leading-snug font-semibold">Готово</h2>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
             <Stat label="Псевдонимов и хешей заменено" value={report.tokens_replaced} />
             <Stat label="Фейков заменено" value={report.fakes_replaced} />
@@ -156,19 +157,16 @@ export default function Unmask() {
               {report.missing_columns.join('; ')}
             </Alert>
           )}
-          <ul className="list-disc space-y-1 pl-5 text-sm text-neutral-600 dark:text-neutral-400">
+          <ul className="list-disc space-y-1 pl-5 text-sm text-slate">
             {report.notes.map((n, i) => (
               <li key={i}>{n}</li>
             ))}
           </ul>
-          <a
-            href={api.downloadUrl(job.job_id, 'restored')}
-            download
-            className="inline-flex rounded-md bg-neutral-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
-          >
+          <ButtonLink variant="primary" href={api.downloadUrl(job.job_id, 'restored')} download>
+            <IconDownload size={16} />
             Скачать {outName}
-          </a>
-          <p className="text-xs text-neutral-500">
+          </ButtonLink>
+          <p className="text-xs text-slate">
             Восстановленный файл содержит настоящие данные — не отправляйте его в облако.
           </p>
         </section>
@@ -180,8 +178,8 @@ export default function Unmask() {
 function Stat({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
   return (
     <div>
-      <dt className="text-neutral-500">{label}</dt>
-      <dd className={`text-xl font-semibold tabular-nums ${warn ? 'text-amber-700 dark:text-amber-300' : ''}`}>{value}</dd>
+      <dt className="text-slate">{label}</dt>
+      <dd className={`text-xl font-semibold tabular-nums ${warn ? 'text-warn' : ''}`}>{value}</dd>
     </div>
   )
 }

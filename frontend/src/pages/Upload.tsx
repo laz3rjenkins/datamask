@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errorText } from '../api/client'
 import type { FileInfo, Meta, Project } from '../api/types'
-import { Alert, Button, Spinner, selectCls } from '../components/ui'
+import { IconUpload } from '../components/icons'
+import { Alert, Button, Spinner, linkCls, selectCls } from '../components/ui'
 
 const REJECT: Record<string, string> = {
   xls: 'Старый формат .xls не поддерживается. Пересохраните файл в Excel как .xlsx',
@@ -50,23 +51,22 @@ export default function Upload({
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6 py-10">
+    <div className="max-w-3xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Маскирование таблицы</h1>
-        <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+        <p className="text-base text-slate">
           Загрузите выгрузку — datamask найдёт колонки с персональными данными и заменит их
           псевдонимами. Файл не покидает этот компьютер.
         </p>
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="project" className="block text-sm font-medium">
+        <label htmlFor="project" className="block text-sm font-semibold">
           Проект
         </label>
         <div className="flex flex-wrap items-center gap-3">
           <select
             id="project"
-            className={`${selectCls} py-2`}
+            className={`${selectCls} h-10 min-w-72`}
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
           >
@@ -77,11 +77,11 @@ export default function Upload({
               </option>
             ))}
           </select>
-          <button type="button" className="text-sm underline" onClick={onOpenProjects}>
+          <button type="button" className={`text-sm ${linkCls}`} onClick={onOpenProjects}>
             {projects.length ? 'Управление проектами' : 'Создать проект'}
           </button>
         </div>
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-slate">
           Проект нужен, чтобы псевдонимы совпадали в разных файлах одного клиента.
         </p>
       </div>
@@ -97,18 +97,19 @@ export default function Upload({
           setOver(false)
           take(e.dataTransfer.files[0])
         }}
-        className={`flex flex-col items-center gap-4 rounded-lg border-2 border-dashed px-6 py-14 text-center transition-colors ${
-          over
-            ? 'border-neutral-900 bg-neutral-100 dark:border-neutral-100 dark:bg-neutral-900'
-            : 'border-neutral-300 dark:border-neutral-700'
+        className={`flex flex-col items-center gap-4 rounded-lg border-2 border-dashed px-6 py-14 text-center transition-colors duration-150 ${
+          over ? 'border-accent bg-band' : 'border-chip bg-ground'
         }`}
       >
         {busy ? (
           <Spinner label="Загружаю и читаю файл…" />
         ) : (
           <>
-            <p className="text-lg">Перетащите файл сюда</p>
-            <p className="text-sm text-neutral-500">
+            <span className="text-slate">
+              <IconUpload size={32} />
+            </span>
+            <p className="text-base font-medium">Перетащите файл сюда</p>
+            <p className="text-sm text-slate">
               .xlsx или .csv, до {meta.max_upload_mb} МБ
             </p>
             <Button variant="primary" onClick={() => input.current?.click()}>

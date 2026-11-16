@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, errorText } from './api/client'
 import type { FileInfo, Job, MaskConfig, Meta, Project } from './api/types'
-import { Alert, Spinner, Steps } from './components/ui'
+import { IconLock, IconMask, IconMenu, IconProjects, IconUnmask } from './components/icons'
+import { Alert, PageHeader, Spinner, Steps } from './components/ui'
 import { initialSettings, type Settings } from './lib/settings'
 import Configure from './pages/Configure'
 import Projects from './pages/Projects'
@@ -18,11 +19,17 @@ type State =
   | { step: 'result'; job: Job; outputName: string }
 
 const STEP_INDEX = { upload: 0, configure: 1, review: 2, result: 3 }
-const SECTIONS: { value: Section; label: string }[] = [
-  { value: 'mask', label: 'Маскирование' },
-  { value: 'unmask', label: 'Размаскировка' },
-  { value: 'projects', label: 'Проекты' },
-]
+const STEP_TITLE = {
+  upload: 'Маскирование таблицы',
+  configure: 'Настройка колонок',
+  review: 'Проверка',
+  result: 'Готово',
+}
+const SECTIONS = [
+  { value: 'mask', label: 'Маскирование', icon: IconMask },
+  { value: 'unmask', label: 'Размаскировка', icon: IconUnmask },
+  { value: 'projects', label: 'Проекты', icon: IconProjects },
+] as const
 
 export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null)
@@ -32,6 +39,10 @@ export default function App() {
   // Имя файла живёт только в памяти вкладки: сервер его не хранит и не пишет в логи.
   const [file, setFile] = useState<{ info: FileInfo; name: string; project: Project | null } | null>(null)
   const [settings, setSettings] = useState<Settings>(initialSettings)
+  // Панель сама сворачивается на «Настройке»: таблице нужна ширина. Кнопка меню — выбор вручную.
+  const [manualCollapse, setManualCollapse] = useState<boolean | null>(null)
+  const collapsed = manualCollapse ?? (section === 'mask' && state.step === 'configure')
+  const [actions, setActions] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
     api.meta().then(setMeta, (e) => setFatal(errorText(e)))
@@ -68,6 +79,7 @@ export default function App() {
           file={file.info}
           settings={settings}
           setSettings={setSettings}
+          actions={actions}
           onFile={(info) => setFile({ ...file, info })}
           onBack={restart}
           onNext={(config) => setState({ step: 'review', config })}
@@ -90,35 +102,71 @@ export default function App() {
     return <Result meta={meta} job={state.job} outputName={state.outputName} onAnother={restart} onCleared={restart} />
   }
 
+  const step = file ? state.step : 'upload'
+  // Узкий экран: панель всегда свёрнута до иконок.
+  const label = collapsed ? 'sr-only' : 'whitespace-nowrap max-md:sr-only'
+  const iconOnly = collapsed ? 'justify-center px-0' : 'max-md:justify-center max-md:px-0'
+
   return (
-    <div className="min-h-screen bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
-      <header className="border-b border-neutral-200 dark:border-neutral-800">
-        <div className="mx-auto flex max-w-[110rem] flex-wrap items-center gap-x-8 gap-y-2 px-4 py-3 sm:px-6">
-          <span className="font-semibold tracking-tight">datamask</span>
-          <nav aria-label="Разделы" className="flex gap-1">
-            {SECTIONS.map((s) => (
+    <div className="flex min-h-screen">
+      {/* ширина плавно меняется при сворачивании; без движения при prefers-reduced-motion (index.css) */}
+      <aside
+        className={`sticky top-0 flex h-screen w-16 shrink-0 flex-col overflow-hidden transition-[width] duration-200 ease-out ${collapsed ? '' : 'md:w-60'}`}
+      >
+        <div className="flex h-16 items-center gap-2 px-3">
+          <button
+            type="button"
+            onClick={() => setManualCollapse(!collapsed)}
+            aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-expanded={!collapsed}
+            className="grid size-10 place-items-center rounded-md text-slate transition-colors duration-150 hover:bg-pill-hover hover:text-ink max-md:hidden"
+          >
+            <IconMenu />
+          </button>
+          <span className={`text-xl font-bold text-navy ${label}`}>datamask</span>
+          <span className="mx-auto text-base font-bold text-navy md:hidden" aria-hidden>
+            dm
+          </span>
+        </div>
+
+        <nav aria-label="Разделы" className="mt-6 flex flex-col">
+          {SECTIONS.map(({ value, label: text, icon: Icon }) => {
+            const active = section === value
+            return (
               <button
-                key={s.value}
+                key={value}
                 type="button"
-                aria-current={section === s.value ? 'page' : undefined}
-                onClick={() => setSection(s.value)}
-                className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
-                  section === s.value
-                    ? 'bg-neutral-100 font-medium dark:bg-neutral-800'
-                    : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
+                aria-current={active ? 'page' : undefined}
+                title={collapsed ? text : undefined}
+                onClick={() => setSection(value)}
+                className={`relative flex h-12 items-center gap-3 px-5 text-[0.9375rem] transition-colors duration-150 ${iconOnly} ${
+                  active ? 'bg-row-active font-semibold' : 'hover:bg-pill-hover'
                 }`}
               >
-                {s.label}
+                {/* черта выбранного раздела у края панели, как на портале */}
+                {active && <span className="absolute inset-y-0 left-0 w-1 bg-accent" aria-hidden />}
+                <Icon />
+                <span className={label}>{text}</span>
               </button>
-            ))}
-          </nav>
-          <span className="ml-auto text-xs text-neutral-500 max-md:hidden">работает без интернета</span>
-        </div>
-      </header>
+            )
+          })}
+        </nav>
 
-      <main className="mx-auto max-w-[110rem] px-4 py-6 sm:px-6">
+        <p
+          className={`mt-auto flex items-start gap-2 px-5 pb-5 text-xs text-slate ${iconOnly}`}
+          title={collapsed ? 'Работает без интернета. Файлы не покидают компьютер' : undefined}
+        >
+          <IconLock size={16} />
+          {/* фиксированная ширина: текст переносится, но не перестраивается во время анимации панели */}
+          <span className={collapsed ? 'sr-only' : 'w-44 shrink-0 max-md:sr-only'}>
+            Работает без интернета. Файлы не покидают компьютер
+          </span>
+        </p>
+      </aside>
+
+      <main className="min-w-0 flex-1 bg-panel px-4 pt-6 pb-12 sm:px-8 md:mt-3 md:rounded-tl-2xl">
         {fatal ? (
-          <div className="mx-auto max-w-xl py-16">
+          <div className="max-w-xl py-10">
             <Alert tone="error" title="Нет связи с datamask">
               {fatal}
             </Alert>
@@ -132,15 +180,17 @@ export default function App() {
         ) : section === 'projects' ? (
           <Projects meta={meta} />
         ) : (
-          <>
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-              <Steps current={STEP_INDEX[state.step]} />
-              {file?.project && (
-                <span className="text-sm text-neutral-500">Проект: {file.project.name}</span>
-              )}
+          <div className="space-y-6">
+            <div className="space-y-4">
+              <PageHeader title={STEP_TITLE[step]}>
+                {file?.project && <span className="text-sm text-slate">Проект: {file.project.name}</span>}
+                {/* сюда шаг рисует свои действия через портал: строка заголовка, как на портале */}
+                <div ref={setActions} className="ml-auto flex flex-wrap gap-2 empty:hidden" />
+              </PageHeader>
+              <Steps current={STEP_INDEX[step]} />
             </div>
             {maskFlow(meta)}
-          </>
+          </div>
         )}
       </main>
     </div>

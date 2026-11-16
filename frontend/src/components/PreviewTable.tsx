@@ -43,18 +43,18 @@ export default function PreviewTable({
   const width = preview.columns.length + 1
 
   if (!preview.columns.length) {
-    return <p className="py-10 text-center text-neutral-500">Лист пустой</p>
+    return <p className="py-10 text-center text-slate">Лист пустой</p>
   }
 
   return (
     <div
       ref={scroller}
-      className="max-h-[calc(100vh-17rem)] min-h-80 overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-800"
+      className="max-h-[calc(100vh-17rem)] min-h-80 overflow-auto rounded-lg border border-line"
     >
       <table className="w-max border-separate border-spacing-0 text-sm">
         <thead>
           <tr>
-            <th className="sticky top-0 left-0 z-20 border-b border-neutral-200 bg-neutral-50 px-2 py-2 text-xs font-normal text-neutral-400 dark:border-neutral-800 dark:bg-neutral-900">
+            <th className="sticky top-0 left-0 z-20 border-b border-line bg-panel px-2 py-2 align-top text-xs font-normal text-slate">
               стр.
             </th>
             {preview.columns.map((c) => {
@@ -63,8 +63,8 @@ export default function PreviewTable({
                 <th
                   key={c.key}
                   scope="col"
-                  className={`sticky top-0 z-10 w-56 max-w-72 min-w-48 border-b border-l border-neutral-200 px-2 py-2 align-top dark:border-neutral-800 ${
-                    selected ? 'bg-amber-50 dark:bg-amber-900/30' : 'bg-neutral-50 dark:bg-neutral-900'
+                  className={`sticky top-0 z-10 w-56 max-w-72 min-w-48 border-b border-l border-line px-2 py-2 align-top ${
+                    selected ? 'bg-band' : 'bg-panel max-sm:w-40 max-sm:min-w-40'
                   } ${c.hidden ? 'opacity-60' : ''}`}
                 >
                   <ColumnHeader
@@ -93,10 +93,10 @@ export default function PreviewTable({
                 key={it.key}
                 data-index={it.index}
                 ref={virtual.measureElement}
-                className={r.above ? 'bg-neutral-50 text-neutral-600 dark:bg-neutral-900/60 dark:text-neutral-400' : ''}
+                className={r.above ? 'text-slate' : ''}
               >
                 <td
-                  className={`sticky left-0 border-b border-neutral-100 px-2 py-1.5 align-top ${r.above ? "bg-neutral-50 dark:bg-neutral-900" : "bg-white dark:bg-neutral-950"} text-right text-xs text-neutral-400 tabular-nums dark:border-neutral-800/60`}
+                  className={`sticky left-0 border-b border-line px-2 py-1.5 align-top bg-panel text-right text-xs text-slate tabular-nums`}
                   title={r.above ? 'Строка над заголовком: проверяется как свободный текст' : undefined}
                 >
                   {r.row}
@@ -110,20 +110,23 @@ export default function PreviewTable({
                   return (
                     <td
                       key={c.key}
-                      className={`max-w-72 border-b border-l border-neutral-100 px-2 py-1.5 align-top dark:border-neutral-800/60 ${
-                        cfg && !r.above ? 'bg-amber-50/60 dark:bg-amber-900/15' : ''
+                      className={`max-w-72 border-b border-l border-line px-2 py-1.5 align-top ${
+                        cfg && !r.above ? 'bg-band' : ''
                       } ${c.hidden ? 'opacity-50' : ''} ${r.kinds[c.index - 1] === 'number' ? 'text-right tabular-nums' : ''}`}
                     >
-                      <div className={free || found ? 'line-clamp-2 whitespace-normal' : 'truncate'} title={text}>
+                      <div
+                        className={`${free || found ? 'line-clamp-2 whitespace-normal' : 'truncate'} ${cfg ? '' : 'max-sm:max-w-36'}`}
+                        title={text}
+                      >
                         {r.kinds[c.index - 1] === 'formula' ? (
-                          <span className="font-mono text-xs text-neutral-500">{text}</span>
+                          <span className="font-mono text-xs text-slate">{text}</span>
                         ) : found ? (
                           splitBySpans(text, found).map((p, i) =>
                             p.span ? (
                               <mark
                                 key={i}
                                 title={labels.get(p.span.entity)}
-                                className="rounded-sm bg-amber-200 px-0.5 text-inherit dark:bg-amber-700/60"
+                                className="rounded-sm bg-mark px-0.5 text-inherit"
                               >
                                 {p.text}
                               </mark>
