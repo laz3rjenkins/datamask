@@ -9,3 +9,7 @@ frontend/dist/
 *.dmmap
 .DS_Store
 backend/tests/fixtures/
+
+# Описание продукта для impeccable: упоминает работодателя, в репозиторий не попадает
+PRODUCT.md
+HANDOFF.md
