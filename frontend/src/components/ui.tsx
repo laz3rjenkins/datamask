@@ -59,6 +59,19 @@ export function Spinner({ label }: { label: string }) {
   )
 }
 
+/** Ход фоновой задачи: полоса и проценты. */
+export function ProgressBar({ value, label }: { value: number; label?: string }) {
+  return (
+    <div className="flex items-center gap-3" role="status">
+      {label && <span className="text-sm text-neutral-500 dark:text-neutral-400">{label}</span>}
+      <div className="h-2 min-w-24 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+        <div className="h-full bg-neutral-900 transition-all dark:bg-neutral-100" style={{ width: `${value}%` }} />
+      </div>
+      <span className="text-sm tabular-nums">{value}%</span>
+    </div>
+  )
+}
+
 /** Значок необратимого способа (SPEC §4 «Честность перед пользователем»). */
 export function Irreversible() {
   return (

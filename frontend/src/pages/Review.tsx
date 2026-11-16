@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, errorText } from '../api/client'
-import type { DryRun, FileInfo, Job, JobSummary, MaskConfig, Meta } from '../api/types'
-import { Alert, Button, Irreversible, Spinner, Tabs, inputCls } from '../components/ui'
+import type { DryRun, FileInfo, Job, JobSummary, MaskConfig, Meta, SummaryResult } from '../api/types'
+import { Alert, Button, Irreversible, ProgressBar, Spinner, Tabs, inputCls } from '../components/ui'
 import { formatCell } from '../lib/format'
 import { useJob } from '../lib/useJob'
 
@@ -35,6 +35,12 @@ export default function Review({
   const [jobId, setJobId] = useState<string | null>(null)
   const [maskError, setMaskError] = useState<string | null>(null)
   const { job, error: jobError } = useJob<JobSummary>(jobId)
+  const [summaryJobId, setSummaryJobId] = useState<string | null>(null)
+  const [summaryStartError, setSummaryStartError] = useState<string | null>(null)
+  const { job: summaryJob, error: summaryJobError } = useJob<SummaryResult>(summaryJobId)
+  const summary = summaryJob?.status === 'done' ? (summaryJob.summary?.columns ?? []) : null
+  const summaryError = summaryStartError ?? summaryJobError
+  const selected = Object.values(config.sheets).some((s) => Object.keys(s.columns).length > 0)
   const project = config.project_id !== null
 
   useEffect(() => {
@@ -42,10 +48,19 @@ export default function Review({
       .dryRun(file.file_id, config)
       .then((d) => {
         setDry(d)
-        setSheet(d.sheets.find((s) => d.summary.some((c) => c.sheet === s.sheet))?.sheet ?? d.sheets[0]?.sheet ?? '')
+        setSheet(d.sheets.find((s) => s.columns.some((c) => c.entity))?.sheet ?? d.sheets[0]?.sheet ?? '')
       })
       .catch((e) => setError(errorText(e)))
   }, [file.file_id, config])
+
+  // Итоги считаются фоновой задачей: на больших файлах это полный проход по листам.
+  useEffect(() => {
+    if (!selected) return
+    api.summary(file.file_id, config).then(
+      (r) => setSummaryJobId(r.job_id),
+      (e) => setSummaryStartError(errorText(e)),
+    )
+  }, [file.file_id, config, selected])
 
   useEffect(() => {
     if (job?.status === 'done') onDone(job, outName)
@@ -174,11 +189,20 @@ export default function Review({
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Что будет заменено</h2>
-        {dry.summary.length === 0 ? (
+        {!selected ? (
           <Alert tone="warn">
             Ни одна колонка не выбрана. Замаскированы будут только находки в шапке над таблицей и
             слова из своего словаря.
           </Alert>
+        ) : summaryError ? (
+          <Alert tone="error">{summaryError}</Alert>
+        ) : !summary ? (
+          <div className="max-w-md">
+            <ProgressBar value={summaryJob?.progress ?? 0} label="Считаю значения по всему файлу…" />
+            <p className="mt-2 text-xs text-neutral-500">
+              Можно не ждать: маскирование запускается и без этой таблицы.
+            </p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -194,7 +218,7 @@ export default function Review({
                 </tr>
               </thead>
               <tbody>
-                {dry.summary.map((c) => (
+                {summary.map((c) => (
                   <tr key={`${c.sheet}!${c.key}`} className="border-b border-neutral-100 dark:border-neutral-800/60">
                     <td className="py-2 pr-4">{c.sheet}</td>
                     <td className="py-2 pr-4">
@@ -313,11 +337,8 @@ export default function Review({
           ← Назад к настройке
         </Button>
         {running ? (
-          <div className="flex w-72 items-center gap-3" role="status">
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
-              <div className="h-full bg-neutral-900 transition-all dark:bg-neutral-100" style={{ width: `${job?.progress ?? 0}%` }} />
-            </div>
-            <span className="text-sm tabular-nums">{job?.progress ?? 0}%</span>
+          <div className="w-72">
+            <ProgressBar value={job?.progress ?? 0} />
           </div>
         ) : (
           <Button variant="primary" disabled={!!passwordProblem || !outName.trim()} onClick={start}>

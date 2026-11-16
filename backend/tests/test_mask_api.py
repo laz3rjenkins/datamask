@@ -36,7 +36,12 @@ def test_dry_run_endpoint(make_client, fixtures) -> None:
     assert row["after"][1] == "Клиент_0001" and row["changed"][1]
     assert next(c for c in sheet["columns"] if c["key"] == "H")["reversible"] is False
     assert any("свободного текста" in w for w in body["warnings"])
-    assert {s["key"] for s in body["summary"] if s["sheet"] == "Клиенты"} >= {"B", "C", "L"}
+    r = client.post(f"/api/files/{file_id}/summary", json=CLIENTS_CONFIG)
+    assert r.status_code == 200, r.text
+    job = wait(client, r.json()["job_id"])
+    columns = job["summary"]["columns"]
+    assert {c["key"] for c in columns if c["sheet"] == "Клиенты"} >= {"B", "C", "L"}
+    assert next(c for c in columns if c["key"] == "B" and c["sheet"] == "Клиенты")["values"] == 30
 
 
 def test_invalid_config_and_password(make_client, fixtures) -> None:

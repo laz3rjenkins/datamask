@@ -563,7 +563,6 @@ class ColumnSummary:
 @dataclass(frozen=True)
 class DryRun:
     sheets: list[DryRunSheet]
-    summary: list[ColumnSummary]
     warnings: list[str]
 
 
@@ -574,7 +573,7 @@ def dry_run(
     resolved = validate_config(config, adapter, doc)
     store = MappingStore(secret)
     engine = Engine(config, store, _collect_originals(adapter, doc, config, resolved, store))
-    sheets, summary = [], []
+    sheets = []
     for info in doc.sheets:
         sc = config.sheets.get(info.name)
         if sc is None:
@@ -612,25 +611,44 @@ def dry_run(
             for c in p.columns
         ]
         sheets.append(DryRunSheet(info.name, sc.header_row, columns, rows))
+    warnings = [FREE_TEXT_WARNING] + [r.message for r in doc.risks]
+    return DryRun(sheets, warnings)
 
+
+def summarize(
+    adapter: FormatAdapter,
+    doc: Document,
+    config: MaskConfig,
+    progress: Callable[[int], None] = lambda p: None,
+) -> list[ColumnSummary]:
+    """Итоги по выбранным колонкам: сколько значений, сколько уникальных, сколько формул.
+    Полный проход по настроенным листам — на больших файлах это фоновая задача."""
+    resolved = validate_config(config, adapter, doc)
+    headers = _headers(adapter, doc, config)
+    configured = [s for s in doc.sheets if s.name in config.sheets]
+    track = _tracker(progress, configured, 0, 99)
+    summary = []
+    for info in configured:
+        sc, cols = config.sheets[info.name], resolved[info.name]
         counts: Counter[int] = Counter()
         formulas: Counter[int] = Counter()
         uniques: dict[int, set[str]] = defaultdict(set)
-        for cell in adapter.iter_cells(doc, info.name):
-            cc = cols.get(cell.col)
-            if cc is None or cell.row <= sc.header_row:
-                continue
-            if cell.kind == "formula":
-                formulas[cell.col] += 1
-            else:
-                counts[cell.col] += 1
-                uniques[cell.col].add(normalize(cc.entity, cell.value))
-        headers = {c.index: c.header for c in p.columns}
+        if cols:
+            for cell in adapter.iter_cells(doc, info.name, cols):
+                track(cell)
+                cc = cols.get(cell.col)
+                if cc is None or cell.row <= sc.header_row:
+                    continue
+                if cell.kind == "formula":
+                    formulas[cell.col] += 1
+                else:
+                    counts[cell.col] += 1
+                    uniques[cell.col].add(normalize(cc.entity, cell.value))
         summary += [
             ColumnSummary(
                 info.name,
                 adapter.column_key(idx),
-                headers.get(idx, ""),
+                headers[info.name].get(idx, ""),
                 cc.entity,
                 cc.method,
                 counts[idx],
@@ -639,8 +657,7 @@ def dry_run(
             )
             for idx, cc in cols.items()
         ]
-    warnings = [FREE_TEXT_WARNING] + [r.message for r in doc.risks]
-    return DryRun(sheets, summary, warnings)
+    return summary
 
 
 # ======================= размаскировка таблиц (M6) =======================

@@ -91,6 +91,9 @@ export const api = {
   dryRun: (fileId: string, config: MaskConfig) =>
     post<DryRun>(`/api/files/${fileId}/dry-run`, config),
 
+  summary: (fileId: string, config: MaskConfig) =>
+    post<{ job_id: string }>(`/api/files/${fileId}/summary`, config),
+
   mask: (
     fileId: string,
     body: { config: MaskConfig; password: string | null; output_name: string },

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import PurePath, PureWindowsPath
 
 from fastapi import APIRouter, Request
@@ -22,6 +22,7 @@ from datamask.core.pipeline import (
     MaskResult,
     dry_run,
     run_mask,
+    summarize,
     validate_config,
 )
 from datamask.core.session import Job, Session
@@ -75,6 +76,20 @@ def dry_run_endpoint(request: Request, file_id: str, config: MaskConfig) -> DryR
         return dry_run(entry.adapter, entry.doc, config, entry.secret)
     except UserError as e:
         raise ApiError(400, "unreadable_file", str(e)) from e
+
+
+@router.post("/files/{file_id}/summary")
+def summary(request: Request, file_id: str, config: MaskConfig) -> dict[str, str]:
+    """Итоги по колонкам для экрана «до/после»: полный проход по листам, поэтому — задача."""
+    entry = _validate(request, file_id, config)
+
+    def work(job: Job) -> None:
+        columns = summarize(entry.adapter, entry.doc, config, lambda p: setattr(job, "progress", p))
+        job.summary = {"columns": [asdict(c) for c in columns]}
+
+    session: Session = request.app.state.session
+    job = session.start_job(work)
+    return {"job_id": job.id}
 
 
 @router.post("/files/{file_id}/mask")

@@ -194,8 +194,12 @@ export interface ColumnSummary {
 
 export interface DryRun {
   sheets: DryRunSheet[]
-  summary: ColumnSummary[]
   warnings: string[]
+}
+
+/** Итоги по колонкам: фоновая задача, на больших файлах — полный проход по листам. */
+export interface SummaryResult {
+  columns: ColumnSummary[]
 }
 
 export interface JobSummary {

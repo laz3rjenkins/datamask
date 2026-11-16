@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 
 from datamask.core.models import EntityType, MaskConfig
 from datamask.core.normalize import to_text
-from datamask.core.pipeline import ConfigError, dry_run, validate_config
+from datamask.core.pipeline import ConfigError, dry_run, summarize, validate_config
 from datamask.detectors.base import DetectContext, find_spans
 from datamask.detectors.regex_ru import DETECTORS
 from datamask.formats import adapter_for
@@ -242,7 +242,10 @@ def test_dry_run_matches_real_run(fixtures, masked) -> None:
     assert row4.changed[0] is False
     out = load_workbook(masked[0])["Клиенты"]
     assert row4.after[6] == out["G4"].value  # сдвиг дат тот же, что в результате (общий секрет)
-    summary = {(s.sheet, s.key): s for s in d.summary}
+    summary = {
+        (s.sheet, s.key): s
+        for s in summarize(adapter, doc, MaskConfig.model_validate(CLIENTS_CONFIG))
+    }
     assert summary[("Клиенты", "B")].values == 30
     assert summary[("Клиенты", "L")].skipped_formulas == 30
     assert summary[("Продажи", "B")].unique == 4
