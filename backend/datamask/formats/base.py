@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -28,7 +28,6 @@ class FormatError(UserError):
 class OpenOptions:
     encoding: str | None = None  # CSV: None = определить автоматически
     delimiter: str | None = None
-    writable: bool = False  # для маскирования: XLSX загружается целиком (с форматированием)
 
 
 @dataclass(frozen=True)
@@ -88,15 +87,27 @@ class FormatAdapter(Protocol):
     def sheets(self, doc: Document) -> list[SheetInfo]: ...
     def column_key(self, index: int) -> str: ...  # буква для XLSX, номер для CSV
     def preview(self, doc: Document, sheet: str, header_row: int | None, limit: int) -> Preview: ...
-    def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]: ...
+    def iter_cells(
+        self, doc: Document, sheet: str, columns: Collection[int] | None = None
+    ) -> Iterator[CellRef]:
+        """Непустые ячейки по порядку. columns — только эти колонки (остальные не разбираются)."""
+        ...
+
     def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]: ...
     def risks(self, doc: Document) -> list[Risk]: ...
     def column_index(self, key: str) -> int: ...  # ValueError для неверного ключа
-    def set_value(self, doc: Document, ref: CellRef, value: CellValue) -> None: ...
-    def sanitize(
-        self, doc: Document, policy: SanitizePolicy, mask_text: Callable[[str], str]
-    ) -> list[str]: ...
-    def save(self, doc: Document, path: Path) -> None: ...
+    def write(
+        self,
+        doc: Document,
+        path: Path,
+        transform: Callable[[CellRef], CellValue],
+        policy: SanitizePolicy | None,
+        mask_text: Callable[[str], str],
+    ) -> list[str]:
+        """Новая копия файла потоком: каждая непустая ячейка проходит через transform (вернул
+        то же значение — ячейка не меняется). policy — очистка метаданных и скрытых мест
+        (None — без очистки, для размаскировки). Возвращает, что сделала очистка."""
+        ...
 
 
 def detect_header_row(rows: Sequence[RawRow]) -> int:

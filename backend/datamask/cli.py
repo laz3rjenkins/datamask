@@ -64,12 +64,16 @@ def mask_main(argv: list[str]) -> int:
 
         started = time.monotonic()
         adapter = adapter_for(args.input.name)
-        doc = adapter.open(args.input, OpenOptions(writable=True))
+        doc = adapter.open(args.input, OpenOptions())
         store = MappingStore(secrets.token_bytes(32))
         result = run_mask(
-            adapter, doc, config, store, lambda n: print(f"\r{n}%", end="", file=sys.stderr)
+            adapter,
+            doc,
+            config,
+            store,
+            args.out,
+            lambda n: print(f"\r{n}%", end="", file=sys.stderr),
         )
-        adapter.save(doc, args.out)
         if config.save_mapping:
             write_atomic(args.mapping, store.encrypt(password))
         print("\r100%", file=sys.stderr)

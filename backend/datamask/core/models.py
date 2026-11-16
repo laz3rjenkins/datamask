@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -30,8 +30,10 @@ def kind_of(value: CellValue) -> CellKind:
     return "string"
 
 
-@dataclass(frozen=True, slots=True)
-class CellRef:
+class CellRef(NamedTuple):
+    """Адрес и значение ячейки. NamedTuple, а не dataclass: создаётся на каждую ячейку
+    файла (десятки миллионов), так втрое дешевле."""
+
     sheet: str
     row: int  # с 1
     col: int  # с 1

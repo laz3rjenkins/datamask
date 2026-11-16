@@ -31,10 +31,7 @@ def unmask_file(src: Path, dest: Path, store: MappingStore) -> dict[str, Any]:
         unmask_text_file(src, dest, unmasker)
     else:
         adapter = adapter_for(src.name)
-        options = OpenOptions(writable=True)
-        doc = adapter.open(src, options)
-        run_unmask_table(adapter, doc, unmasker)
-        adapter.save(doc, dest)
+        run_unmask_table(adapter, adapter.open(src, OpenOptions()), unmasker, dest)
     notes = [TABLE_NOTE]
     if suffix in TEXT_EXTENSIONS and (store.date_shifts or store.scale_factors):
         notes.append(TEXT_NOTE)

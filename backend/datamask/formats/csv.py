@@ -5,8 +5,8 @@ from __future__ import annotations
 import codecs
 import csv
 import re
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from collections.abc import Callable, Collection, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from charset_normalizer import from_bytes
@@ -76,13 +76,14 @@ class CsvDocument(Document):
     delimiter: str = ","
     newline: str = "\n"  # при записи сохраняем исходные переводы строк
     quote_all: bool = False
-    changes: dict[int, dict[int, str]] = field(default_factory=dict)  # строка → колонка → значение
 
 
 class CsvAdapter:
     extensions: tuple[str, ...] = (".csv",)
 
     def open(self, path: Path, options: OpenOptions) -> CsvDocument:
+        # ponytail: файл читается целиком ради проверки кодировки; для CSV в сотни МБ —
+        # проверять первые мегабайты, а ошибку кодировки ловить при записи.
         data = path.read_bytes()
         encoding = options.encoding or detect_encoding(data)
         if encoding not in ENCODINGS:
@@ -123,16 +124,16 @@ class CsvAdapter:
             raise ValueError(key)
         return n
 
-    def set_value(self, doc: Document, ref: CellRef, value: CellValue) -> None:
-        assert isinstance(doc, CsvDocument)
-        doc.changes.setdefault(ref.row, {})[ref.col] = "" if value is None else str(value)
-
-    def sanitize(
-        self, doc: Document, policy: SanitizePolicy, mask_text: Callable[[str], str]
+    def write(
+        self,
+        doc: Document,
+        path: Path,
+        transform: Callable[[CellRef], CellValue],
+        policy: SanitizePolicy | None,
+        mask_text: Callable[[str], str],
     ) -> list[str]:
-        return []  # в CSV нет метаданных и скрытых мест
-
-    def save(self, doc: Document, path: Path) -> None:
+        """Построчно: та же кодировка, разделитель, кавычки и переводы строк. Метаданных и
+        скрытых мест в CSV нет — очищать нечего."""
         assert isinstance(doc, CsvDocument)
         try:
             with path.open("w", encoding=doc.encoding, newline="") as out:
@@ -143,11 +144,14 @@ class CsvAdapter:
                     quoting=csv.QUOTE_ALL if doc.quote_all else csv.QUOTE_MINIMAL,
                 )
                 for r, row in enumerate(self._rows(doc, SHEET), start=1):
-                    for c, value in doc.changes.get(r, {}).items():
-                        row[c - 1] = value
+                    for c, v in enumerate(row, start=1):
+                        if v:
+                            new = transform(CellRef(SHEET, r, c, v, "string"))
+                            row[c - 1] = "" if new is None else str(new)
                     w.writerow(row)
         except UnicodeEncodeError as e:
             raise FormatError("Замаскированное значение не записывается в кодировке файла") from e
+        return []
 
     def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]:
         return iter(())  # в CSV текст есть только в ячейках
@@ -167,8 +171,10 @@ class CsvAdapter:
                 break
         return build_preview(doc.sheet(sheet), raw, header_row, limit, self.column_key)
 
-    def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]:
+    def iter_cells(
+        self, doc: Document, sheet: str, columns: Collection[int] | None = None
+    ) -> Iterator[CellRef]:
         for r, row in enumerate(self._rows(doc, sheet), start=1):
             for c, v in enumerate(row, start=1):
-                if v:
+                if v and (columns is None or c in columns):
                     yield CellRef(sheet, r, c, v, "string")

@@ -199,13 +199,14 @@ class FormatAdapter(Protocol):
     def open(self, path: Path, options: OpenOptions) -> Document: ...
     def sheets(self, doc: Document) -> list[SheetInfo]: ...          # для CSV/TXT — один лист
     def preview(self, doc, sheet: str, header_row: int, limit: int) -> Preview: ...
-    def iter_cells(self, doc, sheet: str) -> Iterator[CellRef]: ...  # адрес + значение + тип
+    def iter_cells(self, doc, sheet: str, columns=None) -> Iterator[CellRef]: ...  # адрес + значение + тип
     def iter_text_fragments(self, doc) -> Iterator[TextFragment]: ...  # имена листов, примечания, шапки
-    def set_value(self, doc, ref: CellRef, value: CellValue) -> None: ...
     def risks(self, doc) -> list[Risk]: ...                          # скрытые листы, сводные и т.п.
-    def sanitize(self, doc, policy: SanitizePolicy) -> list[str]: ...  # очистка метаданных
-    def save(self, doc, path: Path) -> None: ...
+    def write(self, doc, path: Path, transform: Callable[[CellRef], CellValue],
+              policy: SanitizePolicy | None, mask_text) -> list[str]: ...  # копия + очистка
 ```
+
+Запись потоковая: `write` проходит по файлу один раз и для каждой непустой ячейки спрашивает у ядра новое значение (`transform`). Так память не зависит от размера файла (изначально в интерфейсе были `set_value` + `sanitize` + `save` над книгой в памяти, но книга на 200 МБ требовала бы ~23 ГБ).
 
 **Скрытые места утечки в XLSX и что с ними делать:**
 
@@ -231,7 +232,7 @@ class FormatAdapter(Protocol):
 - На выходе сохранять ту же кодировку, разделитель, кавычки и переводы строк.
 - Все значения CSV — строки. Не превращать `007` в `7` и не менять формат дат.
 
-**Объёмы:** целевой размер — до 200 тыс. строк × 30 колонок. Предпросмотр читает файл в режиме `read_only` (быстро, без загрузки всего в память). Маскирование — в фоновой задаче с прогрессом.
+**Объёмы:** файлы до ~200 МБ (десятки листов, миллионы ячеек). Ячейки XLSX читаются и переписываются потоком прямо из XML внутри архива, без загрузки книги в память; структуру книги и очистку делает openpyxl на «скелете» без данных. Подсказки смотрят первые 5000 строк каждого листа, итоги для экрана «до/после» и маскирование — фоновые задачи с прогрессом.
 
 ## 8. Распознаватели и автоподсказки
 

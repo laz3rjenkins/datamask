@@ -6,7 +6,9 @@ import random
 import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from datamask.core.models import (
@@ -25,7 +27,7 @@ from datamask.detectors.base import DetectContext, Detector, find_spans
 from datamask.detectors.headers import thresholds
 from datamask.detectors.regex_ru import DETECTORS, CustomTermsDetector
 from datamask.detectors.suggest import Suggestion, suggest_column
-from datamask.formats.base import Document, FormatAdapter
+from datamask.formats.base import Document, FormatAdapter, SheetInfo
 from datamask.mapping.store import MappingStore
 from datamask.mapping.unmask import Unmasker, UnmaskStats, restore_date, restore_number
 from datamask.maskers import MASKERS, METHOD_LABELS, reversible, supported
@@ -169,6 +171,9 @@ class ConfigError(UserError):
     pass
 
 
+STORE_METHODS = frozenset({"pseudonym", "fake", "hash"})  # пишут в таблицу соответствий
+
+
 Resolved = dict[str, dict[int, ColumnConfig]]  # лист → номер колонки → настройка
 
 
@@ -247,6 +252,7 @@ class Engine:
         self.custom = CustomTermsDetector(terms) if terms else None
         self.dctx = DetectContext(thresholds().keyword_window)
         self.text_spans: Counter[EntityType] = Counter()
+        self.counting = True  # в первом проходе маскирования только заполняется store
 
     def mask_value(
         self, cc: ColumnConfig, value: CellValue, scope: str, info: dict[str, str]
@@ -265,7 +271,8 @@ class Engine:
         for s in reversed(spans):
             out = MASKERS[method].mask(text[s.start : s.end], s.entity, MaskContext(self.store))
             text = text[: s.start] + ("" if out is None else str(out)) + text[s.end :]
-            self.text_spans[s.entity] += 1
+            if self.counting:
+                self.text_spans[s.entity] += 1
         return text
 
 
@@ -296,27 +303,19 @@ def _collect_originals(
             originals[entity].add(normalize(entity, e.original))
     for sheet, cols in resolved.items():
         hr = config.sheets[sheet].header_row
-        for cell in adapter.iter_cells(doc, sheet):
+        wanted = {i for i, cc in cols.items() if cc.entity in fake}
+        if not wanted:
+            continue
+        for cell in adapter.iter_cells(doc, sheet, wanted):
             cc = cols.get(cell.col)
-            if cell.row > hr and cc and cc.entity in fake and cell.kind not in ("formula", "error"):
+            if cell.row > hr and cc and cell.kind not in ("formula", "error"):
                 originals[cc.entity].add(normalize(cc.entity, cell.value))
     return originals
 
 
-def _processed(cell: CellRef, config: MaskConfig, resolved: Resolved) -> bool:
-    sc = config.sheets.get(cell.sheet)
-    if sc is None:
-        return False
-    if cell.row < sc.header_row:
-        return sc.scan_above_header
-    return cell.row > sc.header_row and cell.col in resolved[cell.sheet]
-
-
-def _sweep(
-    adapter: FormatAdapter, doc: Document, config: MaskConfig, resolved: Resolved, engine: Engine
-) -> int:
+def _sweep_index(engine: Engine) -> dict[str, str]:
     """Страховка от утечек вне выбранных колонок: ячейка, целиком равная уже замаскированному
-    значению (сводная, справочный лист), получает тот же псевдоним; свой словарь — везде."""
+    значению (сводная, справочный лист), получает тот же псевдоним."""
     index: dict[str, str] = {}
     for e in engine.store.entries:
         entity = EntityType(e.entity)
@@ -324,23 +323,28 @@ def _sweep(
         # только значения, действительно похожие на свой тип: не заменять везде «нет» или «-»
         if entity == EntityType.CUSTOM or (det and det.match_value(e.original) >= 0.5):
             index.setdefault(generic(e.original), e.masked)
-    if not index and engine.custom is None:
-        return 0
-    custom = [engine.custom] if engine.custom else []
-    replaced = 0
-    for info in doc.sheets:
-        for cell in adapter.iter_cells(doc, info.name):
-            if cell.kind != "string" or not isinstance(cell.value, str):
-                continue
-            if _processed(cell, config, resolved):
-                continue
-            new = index.get(generic(cell.value))
-            if new is None and custom:
-                new = engine.mask_text(cell.value, "pseudonym", custom)
-            if new is not None and new != cell.value:
-                adapter.set_value(doc, cell, new)
-                replaced += 1
-    return replaced
+    return index
+
+
+def _tracker(
+    progress: Callable[[int], None], sheets: Sequence[SheetInfo], lo: int, hi: int
+) -> Callable[[CellRef], None]:
+    """Прогресс внутри прохода по номеру строки: один огромный лист не стоит на месте."""
+    offsets, total = {}, 0
+    for s in sheets:
+        offsets[s.name] = total
+        total += max(s.rows or 1, 1)
+    rows = {s.name: max(s.rows or 1, 1) for s in sheets}
+    seen = 0
+
+    def track(cell: CellRef) -> None:
+        nonlocal seen
+        seen += 1
+        if seen % 20_000 == 0 and cell.sheet in offsets:
+            done = offsets[cell.sheet] + min(cell.row, rows[cell.sheet])
+            progress(lo + (hi - lo) * done // total)
+
+    return track
 
 
 def _warnings(
@@ -371,64 +375,106 @@ def run_mask(
     doc: Document,
     config: MaskConfig,
     store: MappingStore,
+    out: Path,
     progress: Callable[[int], None] = lambda p: None,
 ) -> MaskResult:
-    """doc открыт с OpenOptions(writable=True). Сохранение — adapter.save() после вызова."""
+    """Пишет замаскированную копию doc в out. Два прохода по файлу, память не зависит от его
+    размера: первый заполняет таблицу соответствий (нужна целиком до записи — для страховки
+    вне выбранных колонок), второй пишет результат."""
     resolved = validate_config(config, adapter, doc)
     headers = _headers(adapter, doc, config)
     engine = Engine(config, store, _collect_originals(adapter, doc, config, resolved, store))
-    progress(10)
+    progress(5)
 
-    stats: dict[tuple[str, int], ColumnStats] = {
-        (sheet, idx): ColumnStats(
-            sheet, adapter.column_key(idx), headers[sheet].get(idx, ""), cc.entity, cc.method
-        )
-        for sheet, cols in resolved.items()
-        for idx, cc in cols.items()
-    }
-    for i, info in enumerate(doc.sheets, start=1):
-        sc = config.sheets.get(info.name)
-        if sc is None:
-            continue
-        cols = resolved[info.name]
-        for cell in adapter.iter_cells(doc, info.name):
-            if cell.row < sc.header_row:
-                if sc.scan_above_header and isinstance(cell.value, str):
-                    new_text = engine.mask_text(cell.value)
-                    if new_text != cell.value:
-                        adapter.set_value(doc, cell, new_text)
-                continue
-            cc = cols.get(cell.col)
-            if cell.row == sc.header_row or cc is None:
-                continue
-            st = stats[(info.name, cell.col)]
-            if cell.kind == "formula":
-                st.skipped_formulas += 1
-                continue
-            if cell.kind in ("error", "bool"):
-                st.skipped_other += 1
-                continue
-            col_info = {
-                "sheet": info.name,
-                "column": st.key,
-                "header": st.header,
-                "header_row": str(sc.header_row),
+    stats: dict[tuple[str, int], ColumnStats] = {}
+    where: dict[tuple[str, int], tuple[str, dict[str, str]]] = {}  # область и колонка для store
+    for sheet, cols in resolved.items():
+        for idx, cc in cols.items():
+            key = adapter.column_key(idx)
+            header = headers[sheet].get(idx, "")
+            stats[(sheet, idx)] = ColumnStats(sheet, key, header, cc.entity, cc.method)
+            info = {
+                "sheet": sheet,
+                "column": key,
+                "header": header,
+                "header_row": str(config.sheets[sheet].header_row),
             }
-            try:
-                new = engine.mask_value(cc, cell.value, f"{info.name}!{st.key}", col_info)
-            except MaskSkip:
-                st.skipped_other += 1
-                continue
-            if new != cell.value:
-                adapter.set_value(doc, cell, new)
-                st.replaced += 1
-                if cc.entity != EntityType.FREE_TEXT:
-                    st.unique.add(normalize(cc.entity, cell.value))
-        progress(10 + 60 * i // len(doc.sheets))
+            where[(sheet, idx)] = (f"{sheet}!{key}", info)
 
-    outside = _sweep(adapter, doc, config, resolved, engine)
-    progress(80)
-    actions = adapter.sanitize(doc, config.sanitize, engine.mask_text)
+    def mask(cell: CellRef, cc: ColumnConfig) -> CellValue:
+        scope, info = where[(cell.sheet, cell.col)]
+        return engine.mask_value(cc, cell.value, scope, info)
+
+    # Проход 1: только записи таблицы соответствий (псевдоним, фейк, хеш) — по ним страхуются
+    # ячейки вне выбранных колонок. Остальные способы и счётчики — во втором проходе.
+    engine.counting = False
+    configured = [s for s in doc.sheets if s.name in config.sheets]
+    track = _tracker(progress, configured, 5, 40)
+    for sheet_info in configured:
+        sc, cols = config.sheets[sheet_info.name], resolved[sheet_info.name]
+        if sc.scan_above_header and sc.header_row > 1:
+            head = adapter.preview(doc, sheet_info.name, sc.header_row, 1).above_header
+            for r in head:
+                for v in r.values:
+                    if isinstance(v, str):
+                        engine.mask_text(v)
+        stored = {i: cc for i, cc in cols.items() if cc.method in STORE_METHODS}
+        if not stored:
+            continue
+        for cell in adapter.iter_cells(doc, sheet_info.name, stored):
+            track(cell)
+            col_cc = stored[cell.col]
+            if cell.row > sc.header_row and cell.kind not in ("formula", "error", "bool"):
+                with suppress(MaskSkip):
+                    mask(cell, col_cc)
+    engine.counting = True
+    progress(40)
+
+    # Проход 2: запись. Псевдонимы, фейки и хеши берутся из store, остальное детерминировано.
+    index = _sweep_index(engine)
+    custom = [engine.custom] if engine.custom else []
+    outside = 0
+    track = _tracker(progress, doc.sheets, 40, 95)
+
+    def transform(cell: CellRef) -> CellValue:
+        nonlocal outside
+        track(cell)
+        sc = config.sheets.get(cell.sheet)
+        if sc is not None:
+            if cell.row < sc.header_row and sc.scan_above_header:
+                return engine.mask_text(cell.value) if isinstance(cell.value, str) else cell.value
+            cc = resolved[cell.sheet].get(cell.col) if cell.row > sc.header_row else None
+            if cc is not None:
+                st = stats[(cell.sheet, cell.col)]
+                if cell.kind == "formula":
+                    st.skipped_formulas += 1
+                    return cell.value
+                if cell.kind in ("error", "bool"):
+                    st.skipped_other += 1
+                    return cell.value
+                try:
+                    new = mask(cell, cc)
+                except MaskSkip:
+                    st.skipped_other += 1
+                    return cell.value
+                if new != cell.value:
+                    st.replaced += 1
+                    if cc.entity != EntityType.FREE_TEXT:
+                        st.unique.add(normalize(cc.entity, cell.value))
+                return new
+        # вне выбранных колонок: страховка и свой словарь
+        if cell.kind != "string" or not isinstance(cell.value, str):
+            return cell.value
+        swept = index.get(generic(cell.value))
+        if swept is None and custom:
+            swept = engine.mask_text(cell.value, "pseudonym", custom)
+        if swept is not None and swept != cell.value:
+            outside += 1
+            return swept
+        return cell.value
+
+    actions = adapter.write(doc, out, transform, config.sanitize, engine.mask_text)
+    progress(97)
     columns = list(stats.values())
     return MaskResult(
         columns, engine.text_spans, outside, actions, _warnings(adapter, doc, columns, engine)
@@ -612,26 +658,38 @@ def _restore_targets(
     return out
 
 
-def run_unmask_table(adapter: FormatAdapter, doc: Document, unmasker: Unmasker) -> UnmaskStats:
-    """doc открыт с OpenOptions(writable=True). Сохранение — adapter.save() после вызова."""
+def run_unmask_table(
+    adapter: FormatAdapter,
+    doc: Document,
+    unmasker: Unmasker,
+    out: Path,
+    progress: Callable[[int], None] = lambda p: None,
+) -> UnmaskStats:
+    """Пишет в out копию doc с настоящими значениями."""
     stats = unmasker.stats
-    for info in doc.sheets:
-        targets = _restore_targets(adapter, doc, info.name, unmasker.store, stats)
-        for cell in adapter.iter_cells(doc, info.name):
-            t = targets.get(cell.col)
-            new: CellValue = cell.value
-            if t and cell.row > t.header_row and cell.kind in ("date", "number", "string"):
-                try:
-                    if t.kind == "date":
-                        new = restore_date(cell.value, int(t.param))
-                        stats.dates_restored += 1
-                    else:
-                        new = restore_number(cell.value, t.param)
-                        stats.numbers_restored += 1
-                except MaskSkip:
-                    pass
-            elif cell.kind == "string" and isinstance(cell.value, str):
-                new = unmasker.text(cell.value)
-            if new != cell.value:
-                adapter.set_value(doc, cell, new)
+    targets = {
+        info.name: _restore_targets(adapter, doc, info.name, unmasker.store, stats)
+        for info in doc.sheets
+    }
+    track = _tracker(progress, doc.sheets, 20, 95)
+
+    def transform(cell: CellRef) -> CellValue:
+        track(cell)
+        t = targets[cell.sheet].get(cell.col)
+        if t and cell.row > t.header_row and cell.kind in ("date", "number", "string"):
+            try:
+                if t.kind == "date":
+                    new = restore_date(cell.value, int(t.param))
+                    stats.dates_restored += 1
+                else:
+                    new = restore_number(cell.value, t.param)
+                    stats.numbers_restored += 1
+                return new
+            except MaskSkip:
+                return cell.value
+        if cell.kind == "string" and isinstance(cell.value, str):
+            return unmasker.text(cell.value)
+        return cell.value
+
+    adapter.write(doc, out, transform, None, lambda text: text)
     return stats

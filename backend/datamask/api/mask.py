@@ -25,8 +25,6 @@ from datamask.core.pipeline import (
     validate_config,
 )
 from datamask.core.session import Job, Session
-from datamask.formats.base import OpenOptions
-from datamask.formats.csv import CsvDocument
 from datamask.mapping.crypto import MIN_PASSWORD, MappingError, write_atomic
 from datamask.mapping.store import MappingStore
 from datamask.report import build_report, render_html
@@ -103,16 +101,12 @@ def mask(request: Request, file_id: str, body: MaskIn) -> dict[str, str]:
     if not out_name.lower().endswith(suffix):
         out_name += suffix
     stem = out_name[: -len(suffix)]
-    options = OpenOptions(writable=True)
-    if isinstance(entry.doc, CsvDocument):
-        options = OpenOptions(entry.doc.encoding, entry.doc.delimiter, writable=True)
 
     def run(job: Job, store: MappingStore, cfg: MaskConfig) -> MaskResult:
-        doc = entry.adapter.open(entry.path, options)
-        result = run_mask(entry.adapter, doc, cfg, store, lambda p: setattr(job, "progress", p))
         masked = job.folder / f"masked{suffix}"
-        entry.adapter.save(doc, masked)
-        job.progress = 90
+        result = run_mask(
+            entry.adapter, entry.doc, cfg, store, masked, lambda p: setattr(job, "progress", p)
+        )
         job.artifacts["masked"] = masked
         job.download_names["masked"] = out_name
         return result

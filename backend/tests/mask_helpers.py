@@ -56,10 +56,9 @@ CLIENTS_CONFIG = {
 
 def run(src: Path, out: Path, config: dict, store: MappingStore | None = None):
     adapter = adapter_for(src.name)
-    doc = adapter.open(src, OpenOptions(writable=True))
+    doc = adapter.open(src, OpenOptions())
     store = store or MappingStore(SECRET)
-    result = run_mask(adapter, doc, MaskConfig.model_validate(config), store)
-    adapter.save(doc, out)
+    result = run_mask(adapter, doc, MaskConfig.model_validate(config), store, out)
     return result, store
 
 

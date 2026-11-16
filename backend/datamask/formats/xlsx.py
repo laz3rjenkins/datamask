@@ -1,23 +1,34 @@
-"""XLSX. Значения — openpyxl в режиме read_only; листы и риски — прямо из XML внутри ZIP
-(read_only не знает о скрытых листах/колонках, а полная загрузка большой книги медленная)."""
+"""XLSX. Листы и риски — прямо из XML внутри ZIP; значения ячеек — потоковым разбором
+(xlsx_stream.py), без загрузки книги в память.
+
+Запись: openpyxl загружает «скелет» книги (листы без <sheetData>) — весит килобайты — и, как
+раньше, очищает и пересобирает пакет: в результат попадают только части, которые он понимает.
+Данные листов переписываются потоком из исходника и вклеиваются в листы скелета. Память не
+зависит от размера листов."""
 
 from __future__ import annotations
 
 import posixpath
+import re
+import shutil
+import tempfile
 import zipfile
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from io import BytesIO
+import zlib
+from collections.abc import Callable, Collection, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from xml.etree.ElementTree import Element, ParseError
 
 from defusedxml import ElementTree as ET  # защита от XML-бомб во входных файлах
 from openpyxl import load_workbook
 from openpyxl.comments import Comment
 from openpyxl.packaging.custom import CustomPropertyList
+from openpyxl.styles.stylesheet import Stylesheet
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.utils.cell import range_boundaries
+from openpyxl.utils.datetime import CALENDAR_MAC_1904, WINDOWS_EPOCH
+from openpyxl.workbook.properties import CalcProperties
 
 from datamask.core.models import (
     CellKind,
@@ -26,7 +37,6 @@ from datamask.core.models import (
     Risk,
     SanitizePolicy,
     TextFragment,
-    kind_of,
 )
 from datamask.formats.base import (
     HEADER_SCAN_ROWS,
@@ -34,9 +44,19 @@ from datamask.formats.base import (
     FormatError,
     OpenOptions,
     Preview,
-    RawRow,
     SheetInfo,
     build_preview,
+)
+from datamask.formats.xlsx_stream import (
+    CHUNK,
+    CellCtx,
+    SharedStrings,
+    SstWriter,
+    StreamError,
+    dimension,
+    read_cells,
+    rewrite_rows,
+    strip_prefixes,
 )
 
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
@@ -108,10 +128,10 @@ def _sheet_head(
     return rows, cols, hidden
 
 
-def _inspect(data: bytes) -> tuple[list[SheetInfo], list[Risk]]:
+def _inspect(path: Path) -> tuple[list[SheetInfo], list[Risk]]:
     sheets: list[SheetInfo] = []
     risks: list[Risk] = []
-    with zipfile.ZipFile(BytesIO(data)) as zf:
+    with zipfile.ZipFile(path) as zf:
         wb_part = next(
             (r.target for r in _rels(zf, "").values() if r.type == "officeDocument" and r.target),
             "xl/workbook.xml",
@@ -197,8 +217,8 @@ def _text(el: Element) -> str:
     return "".join(t.text or "" for t in el.iter() if _local(t.tag) == "t")
 
 
-def _fragments(data: bytes) -> Iterator[TextFragment]:
-    with zipfile.ZipFile(BytesIO(data)) as zf:
+def _fragments(path: Path) -> Iterator[TextFragment]:
+    with zipfile.ZipFile(path) as zf:
         wb_part = next(
             (r.target for r in _rels(zf, "").values() if r.type == "officeDocument" and r.target),
             "xl/workbook.xml",
@@ -230,23 +250,59 @@ def _fragments(data: bytes) -> Iterator[TextFragment]:
                         yield TextFragment("comment", _text(c), name, c.get("ref"))
 
 
+def _workbook_part(zf: zipfile.ZipFile) -> str:
+    return next(
+        (r.target for r in _rels(zf, "").values() if r.type == "officeDocument" and r.target),
+        "xl/workbook.xml",
+    )
+
+
+def _rels_path(part: str) -> str:
+    return posixpath.join(posixpath.dirname(part), "_rels", posixpath.basename(part) + ".rels")
+
+
+def _sheet_parts(zf: zipfile.ZipFile) -> dict[str, str]:
+    """Имя листа → путь к XML листа (только листы с ячейками)."""
+    wb_part = _workbook_part(zf)
+    wb_rels = _rels(zf, wb_part)
+    out = {}
+    for el in ET.fromstring(zf.read(wb_part)).iter():
+        if _local(el.tag) == "sheet":
+            rel = wb_rels.get(_attr(el, "id") or "")
+            if rel and rel.target and rel.type == "worksheet":
+                out[el.get("name", "")] = rel.target
+    return out
+
+
+def _load_ctx(zf: zipfile.ZipFile) -> CellCtx:
+    """Строки книги, стили-даты и эпоха: всё, что нужно, чтобы прочитать значения ячеек."""
+    wb_part = _workbook_part(zf)
+    wb_rels = _rels(zf, wb_part).values()
+    epoch = WINDOWS_EPOCH
+    for el in ET.fromstring(zf.read(wb_part)).iter():
+        if _local(el.tag) == "workbookPr" and el.get("date1904") in ("1", "true"):
+            epoch = CALENDAR_MAC_1904
+    sst = next((r.target for r in wb_rels if r.type == "sharedStrings" and r.target), None)
+    styles_part = next((r.target for r in wb_rels if r.type == "styles" and r.target), None)
+    dates: frozenset[int] = frozenset()
+    timedeltas: frozenset[int] = frozenset()
+    if styles_part and styles_part in zf.namelist():
+        stylesheet = Stylesheet.from_tree(ET.fromstring(zf.read(styles_part)))  # type: ignore[arg-type]
+        dates = frozenset(getattr(stylesheet, "date_formats", ()))
+        timedeltas = frozenset(getattr(stylesheet, "timedelta_formats", ()))
+    data = zf.read(sst) if sst and sst in zf.namelist() else b""
+    return CellCtx(SharedStrings(data), dates, timedeltas, epoch)
+
+
+_BROKEN = "Файл повреждён или это не XLSX"
+_STREAM_ERRORS = (StreamError, zipfile.BadZipFile, zlib.error, EOFError, ParseError, KeyError)
+
+
 @dataclass
 class XlsxDocument(Document):
-    # Файл целиком в памяти: read_only-книга не держит открытый файл (Windows не дал бы удалить).
-    data: bytes = b""
-    workbook: Any = None  # openpyxl read_only Workbook, открывается при первом чтении
-    writable: Any = None  # полная книга для маскирования (OpenOptions.writable)
-
-
-def _cell(cell: Any) -> tuple[CellValue, CellKind]:
-    v = cell.value
-    if v is None:
-        return None, "empty"
-    if cell.data_type == "f":
-        return (v if isinstance(v, str) else str(getattr(v, "text", v))), "formula"
-    if cell.data_type == "e":
-        return str(v), "error"
-    return v, kind_of(v)
+    # Файл не держим открытым: ZIP открывается на каждую операцию (Windows не дал бы удалить).
+    parts: dict[str, str] = field(default_factory=dict)  # лист → XML листа
+    ctx: CellCtx | None = None  # читается при первом обращении к ячейкам и кешируется
 
 
 def _wipe_chart_caches(chart: Any) -> int:
@@ -271,20 +327,15 @@ class XlsxAdapter:
     extensions: tuple[str, ...] = (".xlsx",)
 
     def open(self, path: Path, options: OpenOptions) -> XlsxDocument:
-        data = path.read_bytes()
         try:
-            sheets, risks = _inspect(data)
-        except (zipfile.BadZipFile, KeyError, ParseError, ValueError) as e:
-            raise FormatError("Файл повреждён или это не XLSX") from e
+            sheets, risks = _inspect(path)
+            with zipfile.ZipFile(path) as zf:
+                parts = _sheet_parts(zf)
+        except (zipfile.BadZipFile, KeyError, ParseError, ValueError, zlib.error) as e:
+            raise FormatError(_BROKEN) from e
         if not sheets:
             raise FormatError("В книге нет листов с ячейками")
-        doc = XlsxDocument(path, sheets, risks, data)
-        if options.writable:
-            try:
-                doc.writable = load_workbook(BytesIO(data))
-            except Exception as e:
-                raise FormatError("Файл повреждён или это не XLSX") from e
-        return doc
+        return XlsxDocument(path, sheets, risks, parts)
 
     def sheets(self, doc: Document) -> list[SheetInfo]:
         return doc.sheets
@@ -295,123 +346,289 @@ class XlsxAdapter:
     def column_key(self, index: int) -> str:
         return str(get_column_letter(index))
 
-    def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]:
-        assert isinstance(doc, XlsxDocument)
-        return _fragments(doc.data)
-
-    def _ws(self, doc: Document, sheet: str) -> Any:
-        assert isinstance(doc, XlsxDocument)
-        doc.sheet(sheet)  # KeyError для неизвестного листа
-        if doc.workbook is None:
-            try:
-                doc.workbook = load_workbook(BytesIO(doc.data), read_only=True, data_only=False)
-            except Exception as e:
-                raise FormatError("Файл повреждён или это не XLSX") from e
-        return doc.workbook[sheet]
-
     def column_index(self, key: str) -> int:
         return int(column_index_from_string(key.upper()))
 
-    def _rows(self, doc: Document, sheet: str, max_row: int | None = None) -> Iterator[RawRow]:
-        for row in self._ws(doc, sheet).iter_rows(min_row=1, max_row=max_row):
-            yield [_cell(c) for c in row]
+    def iter_text_fragments(self, doc: Document) -> Iterator[TextFragment]:
+        return _fragments(doc.path)
+
+    def _ctx(self, doc: XlsxDocument, zf: zipfile.ZipFile) -> CellCtx:
+        if doc.ctx is None:
+            try:
+                doc.ctx = _load_ctx(zf)
+            except (*_STREAM_ERRORS, ValueError, TypeError) as e:
+                raise FormatError(_BROKEN) from e
+        return doc.ctx
+
+    def _cells(
+        self,
+        doc: Document,
+        sheet: str,
+        max_row: int | None = None,
+        translate: bool = False,
+        columns: Collection[int] | None = None,
+    ) -> Iterator[CellRef]:
+        assert isinstance(doc, XlsxDocument)
+        doc.sheet(sheet)  # KeyError для неизвестного листа
+        with zipfile.ZipFile(doc.path) as zf:
+            ctx = self._ctx(doc, zf)
+            try:
+                with zf.open(doc.parts[sheet]) as f:
+                    yield from read_cells(f, sheet, ctx, max_row, translate, columns)
+            except _STREAM_ERRORS as e:
+                raise FormatError(_BROKEN) from e
 
     def preview(self, doc: Document, sheet: str, header_row: int | None, limit: int) -> Preview:
-        raw = list(self._rows(doc, sheet, (header_row or HEADER_SCAN_ROWS) + limit))
+        max_row = (header_row or HEADER_SCAN_ROWS) + limit
+        raw: list[list[tuple[CellValue, CellKind]]] = []
+        for cell in self._cells(doc, sheet, max_row, translate=True):
+            while len(raw) < cell.row:
+                raw.append([])
+            row = raw[cell.row - 1]
+            row.extend([(None, "empty")] * (cell.col - 1 - len(row)))
+            row.append((cell.value, cell.kind))
         return build_preview(doc.sheet(sheet), raw, header_row, limit, self.column_key)
 
-    def iter_cells(self, doc: Document, sheet: str) -> Iterator[CellRef]:
-        assert isinstance(doc, XlsxDocument)
-        if doc.writable is not None:
-            ws = doc.writable[sheet]
-            # Только существующие ячейки: iter_rows создал бы пустые на весь диапазон.
-            for (r, c), cell in sorted(ws._cells.items()):
-                v, k = _cell(cell)
-                if k != "empty":
-                    yield CellRef(sheet, r, c, v, k)
-            return
-        for r, row in enumerate(self._rows(doc, sheet), start=1):
-            for c, (v, k) in enumerate(row, start=1):
-                if k != "empty":
-                    yield CellRef(sheet, r, c, v, k)
+    def iter_cells(
+        self, doc: Document, sheet: str, columns: Collection[int] | None = None
+    ) -> Iterator[CellRef]:
+        return (c for c in self._cells(doc, sheet, columns=columns) if c.kind != "empty")
 
-    def set_value(self, doc: Document, ref: CellRef, value: CellValue) -> None:
-        assert isinstance(doc, XlsxDocument) and doc.writable is not None
-        cell = doc.writable[ref.sheet].cell(ref.row, ref.col)
-        cell.value = value
-        if isinstance(value, str) and value.startswith("="):
-            cell.data_type = "s"  # текст, а не формула
-        if cell.hyperlink is not None:
-            cell.hyperlink = None  # mailto: и т.п. хранят исходное значение
-
-    def sanitize(
-        self, doc: Document, policy: SanitizePolicy, mask_text: Callable[[str], str]
+    def write(
+        self,
+        doc: Document,
+        path: Path,
+        transform: Callable[[CellRef], CellValue],
+        policy: SanitizePolicy | None,
+        mask_text: Callable[[str], str],
     ) -> list[str]:
-        assert isinstance(doc, XlsxDocument) and doc.writable is not None
-        wb = doc.writable
-        actions = []
+        assert isinstance(doc, XlsxDocument)
+        with (
+            tempfile.TemporaryDirectory(prefix="xlsx-") as tmp_name,
+            zipfile.ZipFile(doc.path) as zf,
+        ):
+            tmp = Path(tmp_name)
+            ctx = self._ctx(doc, zf)
+            try:
+                _make_skeleton(zf, set(doc.parts.values()), tmp / "skeleton.xlsx")
+                wb = load_workbook(tmp / "skeleton.xlsx")
+            except Exception as e:
+                raise FormatError(_BROKEN) from e
+            if wb.calculation is None:  # в книге не было <calcPr>
+                wb.calculation = CalcProperties()
+            links = {
+                (ws.title, c.row, c.column)
+                for ws in wb.worksheets
+                for c in ws._cells.values()
+                if c.hyperlink is not None
+            }
+            data: dict[str, Path] = {}
+            dims: dict[str, bytes | None] = {}
+            with (tmp / "sst.part").open("wb") as sst_out:
+                sst = SstWriter(ctx.sst, sst_out)
+                for i, info in enumerate(doc.sheets):
+                    part, name = doc.parts[info.name], info.name
+                    data[name] = tmp / f"sheet{i}.part"
 
-        props = wb.properties
-        for attr in (
-            "creator", "lastModifiedBy", "title", "subject", "description", "keywords",
-            "category", "identifier", "contentStatus", "version", "language",
-        ):  # fmt: skip
-            setattr(props, attr, None)
-        wb.custom_doc_props = CustomPropertyList()
-        # docProps/app.xml (компания, руководитель) openpyxl пересоздаёт при сохранении
-        actions.append("Метаданные очищены: автор, кто изменил, название, тема, компания")
+                    def on_change(r: int, c: int, name: str = name) -> None:
+                        # гиперссылка (mailto: и т.п.) хранит исходное значение
+                        if (name, r, c) in links:
+                            wb[name].cell(r, c).hyperlink = None
 
-        if policy.hidden_sheets == "remove":
-            hidden = [ws for ws in wb.worksheets if ws.sheet_state != "visible"]
-            if len(hidden) == len(wb.worksheets):
-                hidden = hidden[1:]
-            for ws in hidden:
-                wb.remove(ws)
-                for name in [
-                    n for n, dn in wb.defined_names.items() if ws.title in str(dn.attr_text)
-                ]:
-                    del wb.defined_names[name]
-            if hidden:
-                wb.active = 0
-                actions.append(f"Удалены скрытые листы: {len(hidden)}")
-
-        comments = pivots = images = charts = 0
-        for ws in wb.worksheets:
-            for cell in ws._cells.values():
-                if cell.comment is None:
-                    continue
-                comments += 1
-                if policy.comments == "remove":
-                    cell.comment = None
-                else:
-                    cell.comment = Comment(mask_text(cell.comment.text or ""), "datamask")
-            if ws._pivots:
-                pivots += len(ws._pivots)
-                ws._pivots = []
-            if policy.images == "remove" and ws._images:
-                images += len(ws._images)
-                ws._images = []
-            for chart in ws._charts:
-                charts += _wipe_chart_caches(chart)
-        if comments:
-            actions.append(
-                f"Примечания удалены: {comments}"
-                if policy.comments == "remove"
-                else f"Примечания проверены как свободный текст, авторы скрыты: {comments}"
-            )
-        if pivots:
-            actions.append(
-                f"Сводные таблицы удалены вместе с кэшем исходных данных: {pivots}. "
-                "Значения на их листах остались обычными ячейками, сводную нужно построить заново"
-            )
-        if images:
-            actions.append(f"Удалены изображения: {images}")
-        if charts:
-            actions.append(f"Очищен кэш данных в диаграммах: {charts}")
-        wb.calculation.fullCalcOnLoad = True
-        actions.append("Формулы будут пересчитаны при открытии файла")
+                    try:
+                        with zf.open(part) as f:
+                            dims[name] = dimension(f.read(64 * 1024))
+                        with zf.open(part) as f, data[name].open("wb") as out:
+                            rewrite_rows(f, out, name, ctx, sst, transform, on_change)
+                    except _STREAM_ERRORS as e:
+                        raise FormatError(_BROKEN) from e
+            actions = _sanitize(wb, policy, mask_text) if policy else []
+            wb.calculation.fullCalcOnLoad = True  # кэши формул не переносятся: пересчёт
+            wb.save(tmp / "out.xlsx")
+            _assemble(tmp / "out.xlsx", path, data, dims, tmp / "sst.part", sst.count)
         return actions
 
-    def save(self, doc: Document, path: Path) -> None:
-        assert isinstance(doc, XlsxDocument) and doc.writable is not None
-        doc.writable.save(path)
+
+def _make_skeleton(zf: zipfile.ZipFile, sheet_parts: set[str], dest: Path) -> None:
+    """Книга без данных: листы с пустым <sheetData/> и пустая таблица строк (значений в
+    скелете нет, а openpyxl разобрал бы её целиком в память)."""
+    wb_part = _workbook_part(zf)
+    sst = {r.target for r in _rels(zf, wb_part).values() if r.type == "sharedStrings"}
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_STORED) as out:
+        for item in zf.infolist():
+            if item.filename in sheet_parts:
+                with zf.open(item.filename) as src, out.open(item.filename, "w") as w:
+                    _strip_sheet_data(src, w)
+            elif item.filename in sst:
+                out.writestr(item.filename, _SST_HEAD % 0 + b"</sst>")
+            else:
+                out.writestr(item.filename, zf.read(item.filename))
+
+
+_SHEET_DATA_OPEN = re.compile(rb"<((?:[\w.-]+:)?)sheetData\b[^>]*?(/?)>")
+
+
+def _strip_sheet_data(src: IO[bytes], out: IO[bytes]) -> None:
+    """Копия XML листа с пустым <sheetData/>: потоком, без загрузки листа в память."""
+    state, close, buf = "head", b"", b""
+    while True:
+        chunk = src.read(CHUNK)
+        buf += chunk
+        if state == "head":
+            m = _SHEET_DATA_OPEN.search(buf)
+            if m:
+                out.write(buf[: m.start()] + b"<" + m[1] + b"sheetData/>")
+                buf = buf[m.end() :]
+                state = "tail" if m[2] else "skip"
+                close = b"</" + m[1] + b"sheetData>"
+            elif chunk:
+                keep = max(len(buf) - 1024, 0)  # хвост — на случай тега на стыке кусков
+                out.write(buf[:keep])
+                buf = buf[keep:]
+        if state == "skip":
+            i = buf.find(close)
+            if i >= 0:
+                buf, state = buf[i + len(close) :], "tail"
+            else:
+                buf = buf[-len(close) :]
+                if not chunk:
+                    raise StreamError("sheetData not closed")
+        if state == "tail" or not chunk:
+            out.write(buf)
+            buf = b""
+        if not chunk:
+            return
+
+
+_SST_HEAD = (
+    b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="'
+    b'http://schemas.openxmlformats.org/spreadsheetml/2006/main" uniqueCount="%d">'
+)
+_SST_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+_SHEET_DATA = re.compile(rb"<sheetData\s*/>|<sheetData\b[^>]*>.*?</sheetData>", re.S)
+_DIMENSION = re.compile(rb"<dimension\b[^>]*/>")
+
+
+def _assemble(
+    skeleton: Path,
+    dest: Path,
+    data: dict[str, Path],
+    dims: dict[str, bytes | None],
+    sst_body: Path,
+    sst_count: int,
+) -> None:
+    """Результат: части книги из сохранённого openpyxl скелета + потоковые данные листов +
+    новая таблица строк. Листы сопоставляются по имени: openpyxl переименовывает части."""
+    with zipfile.ZipFile(skeleton) as zs, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zo:
+        wb_part = _workbook_part(zs)
+        sheets = {part: name for name, part in _sheet_parts(zs).items()}
+        old_sst = next(
+            (r.target for r in _rels(zs, wb_part).values() if r.type == "sharedStrings"), None
+        )
+        sst_part = old_sst or posixpath.join(posixpath.dirname(wb_part), "sharedStrings.xml")
+        for item in zs.infolist():
+            name = item.filename
+            raw = zs.read(name)
+            if name in sheets:
+                _splice(zo, name, raw, data[sheets[name]], dims.get(sheets[name]))
+            elif name == sst_part:
+                continue
+            elif old_sst is None and name == "[Content_Types].xml":
+                override = f'<Override PartName="/{sst_part}" ContentType="{_SST_TYPE}"/>'
+                zo.writestr(name, raw.replace(b"</Types>", override.encode() + b"</Types>"))
+            elif old_sst is None and name == _rels_path(wb_part):
+                rel = (
+                    f'<Relationship Id="rIdDatamaskSst" Type="{REL}sharedStrings" '
+                    f'Target="{posixpath.basename(sst_part)}"/>'
+                )
+                zo.writestr(
+                    name, raw.replace(b"</Relationships>", rel.encode() + b"</Relationships>")
+                )
+            else:
+                zo.writestr(name, raw)
+        with zo.open(sst_part, "w", force_zip64=sst_body.stat().st_size > ZIP64_FROM) as w:
+            w.write(_SST_HEAD % sst_count)
+            with sst_body.open("rb") as f:
+                shutil.copyfileobj(f, w, CHUNK)
+            w.write(b"</sst>")
+
+
+ZIP64_FROM = 2**31 - 2**26  # zip64 только когда без него нельзя: старые Excel его не любят
+
+
+def _splice(zo: zipfile.ZipFile, name: str, xml: bytes, rows: Path, dim: bytes | None) -> None:
+    m = _SHEET_DATA.search(xml)
+    if not m:
+        raise StreamError("sheetData not found")
+    before, after = xml[: m.start()], xml[m.end() :]
+    if dim:
+        before = _DIMENSION.sub(lambda _: strip_prefixes(dim), before, count=1)
+    with zo.open(name, "w", force_zip64=rows.stat().st_size > ZIP64_FROM) as w:
+        w.write(before + b"<sheetData>")
+        with rows.open("rb") as f:
+            shutil.copyfileobj(f, w, CHUNK)
+        w.write(b"</sheetData>" + after)
+
+
+def _sanitize(wb: Any, policy: SanitizePolicy, mask_text: Callable[[str], str]) -> list[str]:
+    """Очистка метаданных и скрытых мест утечки на книге openpyxl (скелете)."""
+    actions = []
+
+    props = wb.properties
+    for attr in (
+        "creator", "lastModifiedBy", "title", "subject", "description", "keywords",
+        "category", "identifier", "contentStatus", "version", "language",
+    ):  # fmt: skip
+        setattr(props, attr, None)
+    wb.custom_doc_props = CustomPropertyList()
+    # docProps/app.xml (компания, руководитель) openpyxl пересоздаёт при сохранении
+    actions.append("Метаданные очищены: автор, кто изменил, название, тема, компания")
+
+    if policy.hidden_sheets == "remove":
+        hidden = [ws for ws in wb.worksheets if ws.sheet_state != "visible"]
+        if len(hidden) == len(wb.worksheets):
+            hidden = hidden[1:]
+        for ws in hidden:
+            wb.remove(ws)
+            for name in [n for n, dn in wb.defined_names.items() if ws.title in str(dn.attr_text)]:
+                del wb.defined_names[name]
+        if hidden:
+            wb.active = 0
+            actions.append(f"Удалены скрытые листы: {len(hidden)}")
+
+    comments = pivots = images = charts = 0
+    for ws in wb.worksheets:
+        for cell in ws._cells.values():
+            if cell.comment is None:
+                continue
+            comments += 1
+            if policy.comments == "remove":
+                cell.comment = None
+            else:
+                cell.comment = Comment(mask_text(cell.comment.text or ""), "datamask")
+        if ws._pivots:
+            pivots += len(ws._pivots)
+            ws._pivots = []
+        if policy.images == "remove" and ws._images:
+            images += len(ws._images)
+            ws._images = []
+        for chart in ws._charts:
+            charts += _wipe_chart_caches(chart)
+    if comments:
+        actions.append(
+            f"Примечания удалены: {comments}"
+            if policy.comments == "remove"
+            else f"Примечания проверены как свободный текст, авторы скрыты: {comments}"
+        )
+    if pivots:
+        actions.append(
+            f"Сводные таблицы удалены вместе с кэшем исходных данных: {pivots}. "
+            "Значения на их листах остались обычными ячейками, сводную нужно построить заново"
+        )
+    if images:
+        actions.append(f"Удалены изображения: {images}")
+    if charts:
+        actions.append(f"Очищен кэш данных в диаграммах: {charts}")
+    wb.calculation.fullCalcOnLoad = True
+    actions.append("Формулы будут пересчитаны при открытии файла")
+    return actions
