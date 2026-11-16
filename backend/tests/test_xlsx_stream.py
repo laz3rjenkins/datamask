@@ -1,14 +1,18 @@
 """Потоковое чтение и запись XLSX: то же, что дал бы openpyxl, на любой допустимой разметке."""
 
+import dataclasses
 import json
 import re
 import zipfile
 from datetime import date, datetime
 
 from mask_helpers import CLIENTS_CONFIG, col, leaks, run, zip_text
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from datamask.core.models import kind_of
+from datamask.core.pipeline import sample_sheet
+from datamask.detectors.headers import thresholds
+from datamask.formats import adapter_for
 from datamask.formats.base import OpenOptions
 from datamask.formats.xlsx import XlsxAdapter
 
@@ -194,6 +198,41 @@ def test_csv_write_matches(fixtures, tmp_path) -> None:
     src = (fixtures / "clients_utf8.csv").read_bytes().splitlines()
     res = out.read_bytes().splitlines()
     assert len(src) == len(res) and src[0] == res[0] and src[1] != res[1]
+
+
+# ---------- подсказки на больших листах ----------
+
+
+def test_suggest_reads_only_first_rows(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "long.xlsx"
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Лист")
+    ws.append(["Номер", "Расчёт"])
+    for r in range(2, 702):
+        ws.append([r, f"=A{r}*2"])
+    wb.save(path)
+    small = dataclasses.replace(thresholds(), scan_rows=100)
+    monkeypatch.setattr("datamask.core.pipeline.thresholds", lambda: small)
+    doc = adapter_for(path.name).open(path, OpenOptions())
+    sample = sample_sheet(adapter_for(path.name), doc, "Лист", None)
+    assert sample.formulas[2] == 100 and sample.non_empty[1] == 100
+
+
+def test_suggest_cache_skips_rereading(make_client, fixtures, monkeypatch) -> None:
+    from datamask.api import files
+
+    calls = []
+    real = files.sample_sheet
+    monkeypatch.setattr(files, "sample_sheet", lambda *a: calls.append(a[2]) or real(*a))
+    client = make_client()
+    with (fixtures / "clients.xlsx").open("rb") as f:
+        file_id = client.post("/api/files", files={"file": ("a.xlsx", f)}).json()["file_id"]
+    for categories in ({"commercial": False}, {"commercial": True}, {"personal": False}):
+        r = client.post(f"/api/files/{file_id}/suggest", json={"categories": categories})
+        assert r.status_code == 200
+    assert len(calls) == 4  # по разу на лист, смена категорий файл не перечитывает
+    client.post(f"/api/files/{file_id}/suggest", json={"header_rows": {"Клиенты": 2}})
+    assert calls[4:] == ["Клиенты"]
 
 
 def test_date_cell_masked_keeps_style(fixtures, tmp_path) -> None:

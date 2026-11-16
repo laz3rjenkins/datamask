@@ -100,15 +100,26 @@ def _count(
     return [Finding(e, n) for e, n in found.most_common()]
 
 
-def suggest_sheet(
-    adapter: FormatAdapter,
-    doc: Document,
-    sheet: str,
-    header_row: int | None,
-    detectors: Sequence[Detector],
-) -> SheetSuggestions:
-    # ponytail: полный проход по листу (~5 с на 1 млн ячеек); если станет узким местом —
-    # читать только строки выборки по известному размеру листа.
+@dataclass(frozen=True)
+class SheetSample:
+    """Выборка значений листа для подсказок. Дорогая часть (чтение файла) — здесь; смена
+    категорий и словаря пересчитывает подсказки из выборки без повторного чтения."""
+
+    sheet: str
+    header_row: int
+    keys: dict[int, str]  # номер колонки → адрес в конфиге
+    headers: dict[int, str]
+    samples: dict[int, list[CellValue]]
+    non_empty: Counter[int]
+    formulas: Counter[int]
+    above: list[str]
+
+
+def sample_sheet(
+    adapter: FormatAdapter, doc: Document, sheet: str, header_row: int | None
+) -> SheetSample:
+    """Читает только первые scan_rows строк данных: на листах в сотни тысяч строк подсказки
+    не ждут полного прохода. Выборка равномерная внутри прочитанного (алгоритм R)."""
     th = thresholds()
     head = adapter.preview(doc, sheet, header_row, 1)
     hr = head.header_row
@@ -118,6 +129,8 @@ def suggest_sheet(
     formulas: Counter[int] = Counter()
     above: list[str] = []
     for cell in adapter.iter_cells(doc, sheet):
+        if cell.row > hr + th.scan_rows:
+            break
         if cell.row < hr:
             above.append(to_text(cell.value))
         elif cell.row == hr:
@@ -126,22 +139,48 @@ def suggest_sheet(
             formulas[cell.col] += 1
         elif cell.kind != "error":
             samples.setdefault(cell.col, _Reservoir(th.sample_size, rnd)).add(cell.value)
+    cols = sorted(set(headers) | set(samples) | set(formulas))
+    return SheetSample(
+        sheet,
+        hr,
+        {c: adapter.column_key(c) for c in cols},
+        headers,
+        {c: r.items for c, r in samples.items()},
+        Counter({c: r.seen for c, r in samples.items()}),
+        formulas,
+        above,
+    )
 
+
+def suggest_from_sample(sample: SheetSample, detectors: Sequence[Detector]) -> SheetSuggestions:
+    th = thresholds()
     columns = []
-    for col in sorted(set(headers) | set(samples) | set(formulas)):
-        sample = samples.get(col)
-        header = headers.get(col, "")
+    for col, key in sample.keys.items():
+        values = sample.samples.get(col)
+        header = sample.headers.get(col, "")
         columns.append(
             ColumnSuggestion(
-                key=adapter.column_key(col),
+                key=key,
                 header=header,
-                suggestion=suggest_column(header, sample.items, detectors, th) if sample else None,
-                non_empty=sample.seen if sample else 0,
-                formulas=formulas[col],
+                suggestion=suggest_column(header, values, detectors, th) if values else None,
+                non_empty=sample.non_empty[col],
+                formulas=sample.formulas[col],
             )
         )
     ctx = DetectContext(th.keyword_window)
-    return SheetSuggestions(sheet, hr, columns, _count(above, detectors, ctx))
+    return SheetSuggestions(
+        sample.sheet, sample.header_row, columns, _count(sample.above, detectors, ctx)
+    )
+
+
+def suggest_sheet(
+    adapter: FormatAdapter,
+    doc: Document,
+    sheet: str,
+    header_row: int | None,
+    detectors: Sequence[Detector],
+) -> SheetSuggestions:
+    return suggest_from_sample(sample_sheet(adapter, doc, sheet, header_row), detectors)
 
 
 def scan_fragments(

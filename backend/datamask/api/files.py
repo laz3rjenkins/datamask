@@ -17,11 +17,13 @@ from starlette.datastructures import UploadFile
 from datamask.api.errors import ApiError
 from datamask.core.models import Categories, Category, EntityType, Risk, Span
 from datamask.core.pipeline import (
+    SheetSample,
     SheetSuggestions,
     TextFinding,
     enabled_detectors,
+    sample_sheet,
     scan_fragments,
-    suggest_sheet,
+    suggest_from_sample,
 )
 from datamask.core.session import Session
 from datamask.detectors.base import DetectContext, find_spans
@@ -50,6 +52,15 @@ class FileEntry:
     doc: Document
     # секрет файла: фейки, хеши, сдвиг дат и масштаб в «до/после» и в результате совпадают
     secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    # выборки для подсказок: (лист, строка заголовка или None — авто). Смена категорий и
+    # словаря не перечитывает файл
+    samples: dict[tuple[str, int | None], SheetSample] = field(default_factory=dict)
+
+    def sample(self, sheet: str, header_row: int | None) -> SheetSample:
+        key = (sheet, header_row)
+        if key not in self.samples:
+            self.samples[key] = sample_sheet(self.adapter, self.doc, sheet, header_row)
+        return self.samples[key]
 
 
 @dataclass
@@ -194,6 +205,7 @@ def change_csv_options(request: Request, file_id: str, body: CsvOptionsIn) -> Fi
         body.encoding or entry.doc.encoding, body.delimiter or entry.doc.delimiter
     )
     entry.doc = _open(entry.adapter, entry.path, options)
+    entry.samples.clear()
     return _out(entry)
 
 
@@ -225,7 +237,7 @@ def suggest(request: Request, file_id: str, body: SuggestIn) -> SuggestOut:
     detectors = enabled_detectors(body.categories.enabled(), body.custom_terms)
     try:
         sheets = [
-            suggest_sheet(entry.adapter, entry.doc, s.name, body.header_rows.get(s.name), detectors)
+            suggest_from_sample(entry.sample(s.name, body.header_rows.get(s.name)), detectors)
             for s in entry.doc.sheets
         ]
         findings = scan_fragments(entry.adapter, entry.doc, detectors)

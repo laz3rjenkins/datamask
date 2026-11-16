@@ -18,6 +18,7 @@ RULES_PATH = Path(__file__).with_name("rules.yaml")
 @dataclass(frozen=True)
 class Thresholds:
     sample_size: int
+    scan_rows: int
     match_value_min: float
     strong_value_share: float
     strong_with_header_share: float
