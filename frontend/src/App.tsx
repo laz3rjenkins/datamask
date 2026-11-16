@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, errorText } from './api/client'
 import type { FileInfo, Job, MaskConfig, Meta, Project } from './api/types'
-import { IconLock, IconMask, IconMenu, IconProjects, IconUnmask } from './components/icons'
+import { IconLock, IconMask, IconMenu, IconMoon, IconProjects, IconSun, IconSystem, IconUnmask } from './components/icons'
 import { Alert, PageHeader, Spinner, Steps } from './components/ui'
 import { initialSettings, type Settings } from './lib/settings'
+import { THEME_LABELS, nextTheme, readTheme, setTheme, type ThemePref } from './lib/theme'
 import Configure from './pages/Configure'
 import Projects from './pages/Projects'
 import Result from './pages/Result'
@@ -25,6 +26,7 @@ const STEP_TITLE = {
   review: 'Проверка',
   result: 'Готово',
 }
+const THEME_ICONS = { system: IconSystem, light: IconSun, dark: IconMoon }
 const SECTIONS = [
   { value: 'mask', label: 'Маскирование', icon: IconMask },
   { value: 'unmask', label: 'Размаскировка', icon: IconUnmask },
@@ -43,6 +45,8 @@ export default function App() {
   const [manualCollapse, setManualCollapse] = useState<boolean | null>(null)
   const collapsed = manualCollapse ?? (section === 'mask' && state.step === 'configure')
   const [actions, setActions] = useState<HTMLDivElement | null>(null)
+  const [theme, setThemePref] = useState<ThemePref>(() => readTheme(document.cookie))
+  const ThemeIcon = THEME_ICONS[theme]
 
   useEffect(() => {
     api.meta().then(setMeta, (e) => setFatal(errorText(e)))
@@ -152,8 +156,24 @@ export default function App() {
           })}
         </nav>
 
+        <button
+          type="button"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            const next = nextTheme(theme)
+            setTheme(next, r.x + r.width / 2, r.y + r.height / 2)
+            setThemePref(next)
+          }}
+          aria-label={`Тема: ${THEME_LABELS[theme]}. Переключить`}
+          title={collapsed ? `Тема: ${THEME_LABELS[theme]}` : undefined}
+          className={`mt-auto mb-3 flex h-10 items-center gap-3 px-5 text-sm text-slate transition-colors duration-150 hover:bg-pill-hover hover:text-ink ${iconOnly}`}
+        >
+          <ThemeIcon />
+          <span className={label}>Тема: {THEME_LABELS[theme]}</span>
+        </button>
+
         <p
-          className={`mt-auto flex items-start gap-2 px-5 pb-5 text-xs text-slate ${iconOnly}`}
+          className={`flex items-start gap-2 px-5 pb-5 text-xs text-slate ${iconOnly}`}
           title={collapsed ? 'Работает без интернета. Файлы не покидают компьютер' : undefined}
         >
           <IconLock size={16} />

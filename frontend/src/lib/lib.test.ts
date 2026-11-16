@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Meta, SuggestResult, Template } from '../api/types'
 import { formatCell, splitBySpans } from './format'
+import { nextTheme, readTheme } from './theme'
 import {
   applySuggestions,
   applyTemplate,
@@ -104,5 +105,19 @@ describe('format', () => {
     const pieces = splitBySpans('тел +79121234567 звонить', [{ start: 4, end: 16, entity: 'PHONE' }])
     expect(pieces.map((p) => p.text)).toEqual(['тел ', '+79121234567', ' звонить'])
     expect(pieces[1].span?.entity).toBe('PHONE')
+  })
+})
+
+describe('тема', () => {
+  it('читает выбор из cookie, неизвестное — как в системе', () => {
+    expect(readTheme('')).toBe('system')
+    expect(readTheme('datamask_8765=x; datamask_theme=dark')).toBe('dark')
+    expect(readTheme('datamask_theme=light')).toBe('light')
+    expect(readTheme('datamask_theme=purple')).toBe('system')
+    expect(readTheme('xdatamask_theme=dark')).toBe('system')
+  })
+
+  it('переключает по кругу', () => {
+    expect([nextTheme('system'), nextTheme('light'), nextTheme('dark')]).toEqual(['light', 'dark', 'system'])
   })
 })

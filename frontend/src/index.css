@@ -1,77 +1,67 @@
 @import "tailwindcss";
 
 /* Стилистика корпоративного портала: серая навигация, белая рабочая область, тёмно-синие
-   действия цвета логотипа. Цвета — переменные: тёмная тема ниже переопределяет их, поэтому в
-   компонентах нет dark:-классов. Описание системы — DESIGN.md. */
+   действия цвета логотипа. Каждый цвет — пара light-dark(светлая, тёмная): тему выбирает
+   color-scheme корня (ниже), поэтому в компонентах нет dark:-классов. */
 @theme {
   --color-*: initial;
   --color-white: #ffffff;
   --color-transparent: transparent;
   --color-current: currentColor;
 
-  --color-ground: #f2f2f2; /* фон страницы и навигационной панели */
-  --color-panel: #ffffff; /* рабочая область */
-  --color-pill: #f0f0f0; /* вторичные кнопки, капсула вкладок */
-  --color-pill-hover: #e4e5e8;
-  --color-chip: #dcdcdc;
-  --color-row-active: #e6e9ef; /* выбранный пункт навигации */
-  --color-band: #eef1f7; /* колонка, которая будет замаскирована */
-  --color-line: #e8ebef; /* разделители */
-  --color-field: #7f8692; /* рамка полей: ≥3:1 на белом и сером */
-  --color-ink: #1b1d21;
-  --color-slate: #5b6270; /* вторичный текст */
-  --color-placeholder: #6d737e;
-  --color-disabled: #9aa0aa;
-  --color-navy: #2e4482; /* цвет логотипа: название в панели */
-  --color-primary: #455b98;
-  --color-primary-hover: #3a4f88;
+  --color-ground: light-dark(#f2f2f2, #17191d); /* фон страницы и навигационной панели */
+  --color-panel: light-dark(#ffffff, #1f2228); /* рабочая область */
+  --color-pill: light-dark(#f0f0f0, #2a2e35); /* вторичные кнопки, капсула вкладок */
+  --color-pill-hover: light-dark(#e4e5e8, #343941);
+  --color-chip: light-dark(#dcdcdc, #3a3f48);
+  --color-row-active: light-dark(#e6e9ef, #2a2f3a); /* выбранный пункт навигации */
+  --color-band: light-dark(#eef1f7, #28324b); /* колонка, которая будет замаскирована */
+  --color-line: light-dark(#e8ebef, #2e323a); /* разделители */
+  --color-field: light-dark(#7f8692, #6b7380); /* рамка полей: ≥3:1 на белом и сером */
+  --color-ink: light-dark(#1b1d21, #e6e8ec);
+  --color-slate: light-dark(#5b6270, #a3a9b4); /* вторичный текст */
+  --color-placeholder: light-dark(#6d737e, #8b919c);
+  --color-disabled: light-dark(#9aa0aa, #5d636d);
+  --color-navy: light-dark(#2e4482, #a9bbf0); /* цвет логотипа: название в панели */
+  --color-primary: light-dark(#455b98, #4f68ad);
+  --color-primary-hover: light-dark(#3a4f88, #5871b7); /* белый текст ≥4.5:1 в обеих */
   --color-on-primary: #ffffff;
-  --color-accent: #6682c6; /* черта выбранного пункта, вкладки, кольцо фокуса */
-  --color-link: #4a68b3;
-  --color-danger: #c23a30;
-  --color-danger-bg: #fbe9e8;
-  --color-warn: #7a5200;
-  --color-warn-bg: #fdf3dc;
-  --color-mark: #fde9a8; /* находка внутри текста ячейки */
+  --color-accent: light-dark(#6682c6, #7d97d6); /* черта выбранного пункта, вкладки, кольцо фокуса */
+  --color-link: light-dark(#4a68b3, #8fa8e6);
+  --color-danger: light-dark(#c23a30, #f08a80);
+  --color-danger-bg: light-dark(#fbe9e8, #3a2321);
+  --color-warn: light-dark(#7a5200, #f0cc71);
+  --color-warn-bg: light-dark(#fdf3dc, #352c19);
+  --color-mark: light-dark(#fde9a8, #5c4b16); /* находка внутри текста ячейки */
 
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @layer base {
+  /* Тема. Без атрибута — как в системе (первый кадр до запуска скрипта); data-theme ставит
+     переключатель (lib/theme.ts) — всегда итоговую тему, и для режима «как в системе». */
   :root {
     color-scheme: light dark;
     /* стрелка селекта: цвет text-slate, штрих как у иконок (icons.tsx) */
     --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235b6270' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --color-ground: #17191d;
-      --color-panel: #1f2228;
-      --color-pill: #2a2e35;
-      --color-pill-hover: #343941;
-      --color-chip: #3a3f48;
-      --color-row-active: #2a2f3a;
-      --color-band: #28324b;
-      --color-line: #2e323a;
-      --color-field: #6b7380;
-      --color-ink: #e6e8ec;
-      --color-slate: #a3a9b4;
-      --color-placeholder: #8b919c;
-      --color-disabled: #5d636d;
-      --color-navy: #a9bbf0;
-      --color-primary: #4f68ad;
-      --color-primary-hover: #5871b7; /* белый текст ≥4.5:1 */
-      --color-accent: #7d97d6;
-      --color-link: #8fa8e6;
-      --color-danger: #f08a80;
-      --color-danger-bg: #3a2321;
-      --color-warn: #f0cc71;
-      --color-warn-bg: #352c19;
-      --color-mark: #5c4b16;
-      --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a3a9b4' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
-    }
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a3a9b4' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  }
+
+  /* Смена темы: круг новой темы раскрывается от кнопки (анимация — в lib/theme.ts). Стандартное
+     растворение отключено, иначе обе темы смешиваются. */
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
   }
 
   body {
